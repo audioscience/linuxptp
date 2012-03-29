@@ -53,6 +53,24 @@ char *ev_str[] = {
 	"RS_PASSIVE",
 };
 
+const char *hwtstamp_filter_str[] = {
+	"NONE",
+	"ALL",
+	"SOME",
+	"PTP_V1_L4_EVENT",
+	"PTP_V1_L4_SYNC",
+	"PTP_V1_L4_DELAY_REQ",
+	"PTP_V2_L4_EVENT",
+	"PTP_V2_L4_SYNC",
+	"PTP_V2_L4_DELAY_REQ",
+	"PTP_V2_L2_EVENT",
+	"PTP_V2_L2_SYNC",
+	"PTP_V2_L2_DELAY_REQ",
+	"PTP_V2_EVENT",
+	"PTP_V2_SYNC",
+	"PTP_V2_DELAY_REQ",
+};
+
 char *cid2str(struct ClockIdentity *id)
 {
 	static char buf[64];

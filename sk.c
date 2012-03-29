@@ -29,6 +29,7 @@
 
 #include "print.h"
 #include "sk.h"
+#include "util.h"
 
 /* private methods */
 

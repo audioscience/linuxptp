@@ -1251,6 +1251,7 @@ enum fsm_event port_event(struct port *p, int fd_index)
 	enum fsm_event event = EV_NONE;
 	struct ptp_message *msg;
 	int cnt, fd = p->fda.fd[fd_index];
+	int err;
 
 	switch (fd_index) {
 	case FD_ANNOUNCE_TIMER:
@@ -1295,8 +1296,9 @@ enum fsm_event port_event(struct port *p, int fd_index)
 		msg_put(msg);
 		return EV_FAULT_DETECTED;
 	}
-	if (msg_post_recv(msg, cnt)) {
-		pr_err("port %hu: bad message", portnum(p));
+	if ((err = msg_post_recv(msg, cnt))) {
+		pr_err("port %hu: bad message %d", portnum(p), err);
+		debug_buf_hex(msg, sizeof(*msg));
 		msg_put(msg);
 		return EV_NONE;
 	}
@@ -1304,6 +1306,8 @@ enum fsm_event port_event(struct port *p, int fd_index)
 		msg_put(msg);
 		return EV_NONE;
 	}
+
+	debug_buf_hex(msg, sizeof(*msg));
 
 	switch (msg_type(msg)) {
 	case SYNC:

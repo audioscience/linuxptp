@@ -33,6 +33,11 @@ extern char *ps_str[];
 extern char *ev_str[];
 
 /**
+ * Table of human readable strings, one for each hwtimestamp filter type.
+ */
+extern const char *hwtstamp_filter_str[];
+
+/**
  * Convert a clock identity into a human readable string.
  *
  * Note that this function uses a static global variable to store the

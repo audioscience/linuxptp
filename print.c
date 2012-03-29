@@ -68,3 +68,20 @@ void print(int level, char const *format, ...)
 		       ts.tv_sec, ts.tv_nsec / 1000000, buf);
 	}
 }
+
+void debug_buf_hex(void *buf, size_t n)
+{
+	int i;
+	unsigned char *ptr = buf;
+
+	ptr = ptr - 14; // backward to show ethernet headers
+
+	if ((LOG_DEBUG + 1) > print_level)
+		return;
+
+	fprintf(stdout, "ptp4l: hex ");
+	for (i = 0; i < n; i++) {
+		fprintf(stdout, "%02x ", ptr[i]);
+	}
+	fprintf(stdout, "\n");
+}

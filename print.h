@@ -37,4 +37,6 @@ void print_verbose(void);
 #define pr_info(x...)    print(LOG_INFO, x)
 #define pr_debug(x...)   print(LOG_DEBUG, x)
 
+void debug_buf_hex(void *buf, size_t n);
+
 #endif

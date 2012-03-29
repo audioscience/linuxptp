@@ -277,6 +277,7 @@ int msg_post_recv(struct ptp_message *m, int cnt)
 		return -1;
 	}
 
+	pr_debug("msg_post_recv %s OK", msg_type_string(type));
 	return 0;
 }
 
@@ -320,6 +321,7 @@ int msg_pre_send(struct ptp_message *m)
 	default:
 		return -1;
 	}
+	pr_debug("msg_pre_send %s OK", msg_type_string(type));
 	return 0;
 }
 
