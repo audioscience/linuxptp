@@ -34,6 +34,7 @@ struct interface {
 	enum delay_mechanism dm;
 	enum transport_type transport;
 	enum timestamp_type timestamping;
+	int gptp_mode;
 };
 
 /** Opaque type. */

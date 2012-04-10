@@ -25,8 +25,9 @@
 
 /**
  * Allocate an instance of a raw Ethernet transport.
+ * @param gptp_mode  gPTP mode flag.
  * @return Pointer to a new transport instance on success, NULL otherwise.
  */
-struct transport *raw_transport_create(void);
+struct transport *raw_transport_create(int gptp_mode);
 
 #endif

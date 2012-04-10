@@ -63,9 +63,11 @@ int sk_receive(int fd, void *buf, int buflen,
  * @param fd      An open socket.
  * @param device  The name of the network interface to configure.
  * @param type    The requested flavor of time stamping.
+ * @param gptp_mode gPTP mode flag.
  * @return        Zero on success, non-zero otherwise.
  */
-int sk_timestamping_init(int fd, char *device, enum timestamp_type type);
+int sk_timestamping_init(int fd, char *device, enum timestamp_type type,
+				int gptp_mode);
 
 /**
  * Limits the number of RECVMSG(2) calls when attempting to obtain a

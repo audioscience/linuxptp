@@ -33,11 +33,12 @@
 
 /* private methods */
 
-static int hwts_init(int fd, char *device)
+static int hwts_init(int fd, char *device, int gptp_mode)
 {
 	struct ifreq ifreq;
 	struct hwtstamp_config cfg, req;
 	int err;
+	int req_rx_filter;
 
 	memset(&ifreq, 0, sizeof(ifreq));
 	memset(&cfg, 0, sizeof(cfg));
@@ -46,22 +47,35 @@ static int hwts_init(int fd, char *device)
 
 	ifreq.ifr_data = (void *) &cfg;
 	cfg.tx_type    = HWTSTAMP_TX_ON;
-	cfg.rx_filter  = HWTSTAMP_FILTER_PTP_V2_EVENT;
+
+	if (gptp_mode)
+		req_rx_filter  = HWTSTAMP_FILTER_PTP_V2_L2_EVENT;
+	else
+		req_rx_filter  = HWTSTAMP_FILTER_PTP_V2_EVENT;
+
+	cfg.rx_filter = req_rx_filter;
 
 	req = cfg;
 	err = ioctl(fd, SIOCSHWTSTAMP, &ifreq);
 	if (err < 0)
 		pr_err("ioctl SIOCSHWTSTAMP failed: %m");
+	else if (memcmp(&cfg, &req, sizeof(cfg))) {
 
-	if (memcmp(&cfg, &req, sizeof(cfg))) {
-
-		pr_warning("driver changed our HWTSTAMP options");
-		pr_warning("tx_type   %d not %d", cfg.tx_type, req.tx_type);
-		pr_warning("rx_filter %d not %d", cfg.rx_filter, req.rx_filter);
-
-		if (cfg.tx_type != HWTSTAMP_TX_ON ||
-		    cfg.rx_filter != HWTSTAMP_FILTER_ALL) {
+		pr_warning("driver changed our HWTSTAMP options:");
+		if (cfg.tx_type != HWTSTAMP_TX_ON) {
+			pr_err(" tx timestamping disabled");
 			return -1;
+		}
+
+		if (cfg.rx_filter != req.rx_filter) {
+			pr_warning(" requested filter %s, got %s",
+				hwtstamp_filter_str[req.rx_filter],
+				hwtstamp_filter_str[cfg.rx_filter]);
+
+			if (cfg.rx_filter != HWTSTAMP_FILTER_ALL) {
+				pr_err("  filter excludes too much");
+				return -1;
+			}
 		}
 	}
 
@@ -218,7 +232,8 @@ int sk_receive(int fd, void *buf, int buflen,
 	return cnt;
 }
 
-int sk_timestamping_init(int fd, char *device, enum timestamp_type type)
+int sk_timestamping_init(int fd, char *device, enum timestamp_type type,
+				int gptp_mode)
 {
 	int flags;
 
@@ -242,7 +257,7 @@ int sk_timestamping_init(int fd, char *device, enum timestamp_type type)
 		return -1;
 	}
 
-	if (type != TS_SOFTWARE && hwts_init(fd, device))
+	if (type != TS_SOFTWARE && hwts_init(fd, device, gptp_mode))
 		return -1;
 
 	if (setsockopt(fd, SOL_SOCKET, SO_TIMESTAMPING,

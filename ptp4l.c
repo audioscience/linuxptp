@@ -58,6 +58,8 @@ static void usage(char *progname)
 {
 	fprintf(stderr,
 		"\nusage: %s [options]\n\n"
+		" Standard compliance (per interface)\n\n"
+		" -g        802.1AS mode (implies -P, -2, -m)\n\n"
 		" Delay Mechanism (per interface)\n\n"
 		" -A        Auto, starting with E2E\n"
 		" -E        E2E, delay request-response (default)\n"
@@ -88,7 +90,7 @@ static void usage(char *progname)
 int main(int argc, char *argv[])
 {
 	char *config = NULL, *req_phc = NULL, *progname;
-	int c, i, nports = 0, slaveonly = 0;
+	int c, i, nports = 0, slaveonly = 0, gptp_mode = 0;
 	struct interface iface[MAX_PORTS];
 	enum delay_mechanism dm = DM_E2E;
 	enum transport_type transport = TRANS_UDP_IPV4;
@@ -99,7 +101,7 @@ int main(int argc, char *argv[])
 	/* Process the command line arguments. */
 	progname = strrchr(argv[0], '/');
 	progname = progname ? 1+progname : argv[0];
-	while (EOF != (c = getopt(argc, argv, "246AEf:hi:l:mPp:qrsvz"))) {
+	while (EOF != (c = getopt(argc, argv, "246AEf:hi:l:mPp:qrsvzg"))) {
 		switch (c) {
 		case '2':
 			transport = TRANS_IEEE_802_3;
@@ -124,6 +126,7 @@ int main(int argc, char *argv[])
 				iface[nports].name = optarg;
 				iface[nports].dm = dm;
 				iface[nports].transport = transport;
+				iface[nports].gptp_mode = gptp_mode;
 				nports++;
 			} else {
 				fprintf(stderr, "too many interfaces\n");
@@ -135,6 +138,12 @@ int main(int argc, char *argv[])
 			break;
 		case 'm':
 			slaveonly = 1;
+			break;
+		case 'g':
+			transport = TRANS_IEEE_802_3;
+			slaveonly = 1;
+			dm = DM_P2P;
+			gptp_mode = 1;
 			break;
 		case 'P':
 			dm = DM_P2P;

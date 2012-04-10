@@ -248,7 +248,8 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 
 	for (i = 0; i < count; i++) {
 		c->port[i] = port_open(pod, phc_index, iface[i].name, iface[i].transport,
-				       iface[i].timestamping, 1+i, iface[i].dm, c);
+				       iface[i].timestamping, 1+i, iface[i].dm,
+				       iface[i].gptp_mode, c);
 		if (!c->port[i]) {
 			pr_err("failed to open port %s", iface[i].name);
 			return NULL;

@@ -45,6 +45,7 @@ struct port {
 	char *name;
 	struct clock *clock;
 	struct transport *trp;
+	int gptp_mode;
 	enum timestamp_type timestamping;
 	struct fdarray fda;
 	struct foreign_clock *best;
@@ -384,6 +385,8 @@ static int port_pdelay_request(struct port *p)
 	msg->header.sequenceId         = p->seqnum.delayreq++;
 	msg->header.control            = CTL_OTHER;
 	msg->header.logMessageInterval = 0x7f;
+	if (p->gptp_mode)
+		msg->header.tsmt |= TRANSPORT_GPTP;
 
 	if (msg_pre_send(msg))
 		goto out;
@@ -431,11 +434,17 @@ static int port_delay_request(struct port *p)
 	msg->header.sequenceId         = p->seqnum.delayreq++;
 	msg->header.control            = CTL_DELAY_REQ;
 	msg->header.logMessageInterval = 0x7f;
+	if (p->gptp_mode)
+		msg->header.tsmt |= TRANSPORT_GPTP;
 
 	if (msg_pre_send(msg))
 		goto out;
 
-	cnt = transport_send(p->trp, &p->fda, 1, msg, pdulen, &msg->hwts);
+	if (p->gptp_mode)
+		cnt = transport_peer(p->trp, &p->fda, 1, msg, pdulen, &msg->hwts);
+	else
+		cnt = transport_send(p->trp, &p->fda, 1, msg, pdulen, &msg->hwts);
+
 	if (cnt <= 0) {
 		pr_err("port %hu: send delay request failed", portnum(p));
 		goto out;
@@ -498,12 +507,19 @@ static int port_tx_announce(struct port *p)
 	msg->announce.grandmasterIdentity     = dad->grandmasterIdentity;
 	msg->announce.stepsRemoved            = clock_steps_removed(p->clock);
 	msg->announce.timeSource              = tp->timeSource;
+	if (p->gptp_mode)
+		msg->header.tsmt |= TRANSPORT_GPTP;
 
 	if (msg_pre_send(msg)) {
 		err = -1;
 		goto out;
 	}
-	cnt = transport_send(p->trp, &p->fda, 0, msg, pdulen, &msg->hwts);
+
+	if (p->gptp_mode)
+		cnt = transport_peer(p->trp, &p->fda, 0, msg, pdulen, &msg->hwts);
+	else
+		cnt = transport_send(p->trp, &p->fda, 0, msg, pdulen, &msg->hwts);
+
 	if (cnt <= 0) {
 		pr_err("port %hu: send announce failed", portnum(p));
 		err = -1;
@@ -538,6 +554,8 @@ static int port_tx_sync(struct port *p)
 	msg->header.sequenceId         = p->seqnum.sync++;
 	msg->header.control            = CTL_SYNC;
 	msg->header.logMessageInterval = p->logSyncInterval;
+	if (p->gptp_mode)
+		msg->header.tsmt |= TRANSPORT_GPTP;
 
 	msg->header.flagField[0] |= TWO_STEP;
 
@@ -545,7 +563,12 @@ static int port_tx_sync(struct port *p)
 		err = -1;
 		goto out;
 	}
-	cnt = transport_send(p->trp, &p->fda, 1, msg, pdulen, &msg->hwts);
+
+	if (p->gptp_mode)
+		cnt = transport_peer(p->trp, &p->fda, 1, msg, pdulen, &msg->hwts);
+	else
+		cnt = transport_send(p->trp, &p->fda, 1, msg, pdulen, &msg->hwts);
+
 	if (cnt <= 0) {
 		pr_err("port %hu: send sync failed", portnum(p));
 		err = -1;
@@ -571,6 +594,8 @@ static int port_tx_sync(struct port *p)
 	fup->header.sequenceId         = p->seqnum.sync - 1;
 	fup->header.control            = CTL_FOLLOW_UP;
 	fup->header.logMessageInterval = p->logSyncInterval;
+	if (p->gptp_mode)
+		fup->header.tsmt |= TRANSPORT_GPTP;
 
 	ts_to_timestamp(&msg->hwts.ts, &fup->follow_up.preciseOriginTimestamp);
 
@@ -578,7 +603,12 @@ static int port_tx_sync(struct port *p)
 		err = -1;
 		goto out;
 	}
-	cnt = transport_send(p->trp, &p->fda, 0, fup, pdulen, &fup->hwts);
+	
+	if (p->gptp_mode)
+		cnt = transport_peer(p->trp, &p->fda, 0, fup, pdulen, &fup->hwts);
+	else
+		cnt = transport_send(p->trp, &p->fda, 0, fup, pdulen, &fup->hwts);
+	
 	if (cnt <= 0) {
 		pr_err("port %hu: send follow up failed", portnum(p));
 		err = -1;
@@ -795,6 +825,8 @@ static int process_delay_req(struct port *p, struct ptp_message *m)
 	msg->header.sequenceId         = m->header.sequenceId;
 	msg->header.control            = CTL_DELAY_RESP;
 	msg->header.logMessageInterval = p->logMinDelayReqInterval;
+	if (p->gptp_mode)
+		msg->header.tsmt |= TRANSPORT_GPTP;
 
 	ts_to_timestamp(&m->hwts.ts, &msg->delay_resp.receiveTimestamp);
 
@@ -804,7 +836,12 @@ static int process_delay_req(struct port *p, struct ptp_message *m)
 		err = -1;
 		goto out;
 	}
-	cnt = transport_send(p->trp, &p->fda, 0, msg, pdulen, NULL);
+	
+	if (p->gptp_mode)
+		cnt = transport_peer(p->trp, &p->fda, 0, msg, pdulen, NULL);
+	else
+		cnt = transport_send(p->trp, &p->fda, 0, msg, pdulen, NULL);
+	
 	if (cnt <= 0) {
 		pr_err("port %hu: send delay response failed", portnum(p));
 		err = -1;
@@ -921,6 +958,8 @@ static int process_pdelay_req(struct port *p, struct ptp_message *m)
 	rsp->header.sequenceId         = m->header.sequenceId;
 	rsp->header.control            = CTL_OTHER;
 	rsp->header.logMessageInterval = 0x7f;
+	if (p->gptp_mode)
+		rsp->header.tsmt |= TRANSPORT_GPTP;
 
 	rsp->header.flagField[0] |= TWO_STEP;
 
@@ -943,6 +982,8 @@ static int process_pdelay_req(struct port *p, struct ptp_message *m)
 	fup->header.sequenceId         = m->header.sequenceId;
 	fup->header.control            = CTL_OTHER;
 	fup->header.logMessageInterval = 0x7f;
+	if (p->gptp_mode)
+		fup->header.tsmt |= TRANSPORT_GPTP;
 
 	fup->pdelay_resp_fup.requestingPortIdentity = m->header.sourcePortIdentity;
 
@@ -1002,7 +1043,7 @@ static void port_peer_delay(struct port *p)
 	c1 = correction_to_tmv(rsp->header.correction);
 
 	/* Process one-step response immediately. */
-	if (one_step(rsp)) {
+	if (one_step(rsp) && !p->gptp_mode) {
 		t2 = tmv_zero();
 		t3 = tmv_zero();
 		c2 = tmv_zero();
@@ -1100,7 +1141,7 @@ static void process_sync(struct port *p, struct ptp_message *m)
 
 	// TODO - add asymmetry value to correctionField.
 
-	if (one_step(m)) {
+	if (one_step(m) && !p->gptp_mode) {
 		port_synchronize(p, m->hwts.ts, m->ts.pdu,
 				 m->header.correction, 0);
 		return;
@@ -1354,6 +1395,7 @@ struct port *port_open(struct port_defaults *pod,
 		       enum timestamp_type timestamping,
 		       int number,
 		       enum delay_mechanism dm,
+		       int gptp_mode,
 		       struct clock *clock)
 {
 	struct port *p = malloc(sizeof(*p));
@@ -1375,8 +1417,9 @@ struct port *port_open(struct port_defaults *pod,
 
 	p->pod = *pod;
 	p->name = name;
+	p->gptp_mode = gptp_mode;
 	p->clock = clock;
-	p->trp = transport_create(transport);
+	p->trp = transport_create(transport, gptp_mode);
 	if (!p->trp) {
 		free(p);
 		return NULL;

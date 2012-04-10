@@ -96,6 +96,7 @@ struct port *port_open(struct port_defaults *pod,
 		       enum timestamp_type timestamping,
 		       int number,
 		       enum delay_mechanism dm,
+		       int gptp_mode,
 		       struct clock *clock);
 
 /**

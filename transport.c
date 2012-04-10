@@ -52,7 +52,7 @@ int transport_peer(struct transport *t, struct fdarray *fda, int event,
 	return t->send(t, fda, event, 1, buf, buflen, hwts);
 }
 
-struct transport *transport_create(enum transport_type type)
+struct transport *transport_create(enum transport_type type, int gptp_mode)
 {
 	switch (type) {
 	case TRANS_UDP_IPV4:
@@ -60,7 +60,7 @@ struct transport *transport_create(enum transport_type type)
 	case TRANS_UDP_IPV6:
 		return udp6_transport_create();
 	case TRANS_IEEE_802_3:
-		return raw_transport_create();
+		return raw_transport_create(gptp_mode);
 	case TRANS_DEVICENET:
 	case TRANS_CONTROLNET:
 	case TRANS_PROFINET:

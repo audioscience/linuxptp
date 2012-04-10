@@ -63,9 +63,10 @@ int transport_peer(struct transport *t, struct fdarray *fda, int event,
 /**
  * Allocate an instance of the specified transport.
  * @param type  Which transport to obtain.
+ * @param gptp_mode gPTP mode flag.
  * @return      Pointer to a transport instance on success, NULL otherwise.
  */
-struct transport *transport_create(enum transport_type type);
+struct transport *transport_create(enum transport_type type, int gptp_mode);
 
 /**
  * Free an instance of a transport.

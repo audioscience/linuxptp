@@ -47,6 +47,7 @@ struct raw {
 	struct transport t;
 	struct eth_addr ptp_addr;
 	struct eth_addr p2p_addr;
+	int gptp_mode;
 };
 
 #define OP_AND  (BPF_ALU | BPF_AND | BPF_K)
@@ -199,7 +200,7 @@ static int raw_open(struct transport *t, char *name,
 	if (gfd < 0)
 		goto no_general;
 
-	if (sk_timestamping_init(efd, name, ts_type))
+	if (sk_timestamping_init(efd, name, ts_type, raw->gptp_mode))
 		goto no_timestamping;
 
 	fda->fd[FD_EVENT] = efd;
@@ -261,7 +262,7 @@ static void raw_release(struct transport *t)
 	free(raw);
 }
 
-struct transport *raw_transport_create(void)
+struct transport *raw_transport_create(int gptp_mode)
 {
 	struct raw *raw;
 	raw = calloc(1, sizeof(*raw));
@@ -272,5 +273,6 @@ struct transport *raw_transport_create(void)
 	raw->t.recv    = raw_recv;
 	raw->t.send    = raw_send;
 	raw->t.release = raw_release;
+	raw->gptp_mode = gptp_mode;
 	return &raw->t;
 }
