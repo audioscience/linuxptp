@@ -58,13 +58,13 @@ static void usage(char *progname)
 {
 	fprintf(stderr,
 		"\nusage: %s [options]\n\n"
-		" Standard compliance (per interface)\n\n"
+		" Standard compliance (per interface, must appear before the interface it references)\n\n"
 		" -g        802.1AS mode (implies -P, -2, -m)\n\n"
-		" Delay Mechanism (per interface)\n\n"
+		" Delay Mechanism (per interface, must appear before the interface it references)\n\n"
 		" -A        Auto, starting with E2E\n"
 		" -E        E2E, delay request-response (default)\n"
 		" -P        P2P, peer delay mechanism\n\n"
-		" Network Transport (per interface)\n\n"
+		" Network Transport (per interface, must appear before the interface it references)\n\n"
 		" -2        IEEE 802.3\n"
 		" -4        UDP IPV4 (default)\n"
 		" -6        UDP IPV6\n\n"
