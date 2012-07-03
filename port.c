@@ -1074,6 +1074,12 @@ calc:
 	pd = tmv_sub(pd, c2);
 	pd = tmv_div(pd, 2);
 
+	pr_debug("path_delay = (t2 - t3) + (t4 - t1) = %10lld", pd);
+	pr_debug("t2 - t3 = %+10lld", t2 - t3);
+	pr_debug("t4 - t1 = %+10lld", t4 - t1);
+	pr_debug("c1 %10lld", c1);
+	pr_debug("c2 %10lld", c2);
+
 	p->peer_delay = mave_accumulate(p->avg_delay, pd);
 
 	pr_debug("pdelay %hu   %10lld %10lld", portnum(p), p->peer_delay, pd);
