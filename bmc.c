@@ -18,8 +18,10 @@
  */
 #include <string.h>
 
+#include "print.h"
 #include "bmc.h"
 #include "ds.h"
+#include "util.h"
 
 #define A_BETTER_TOPO  2
 #define A_BETTER       1
@@ -76,7 +78,7 @@ static int dscmp2(struct dataset *a, struct dataset *b)
 
 int dscmp(struct dataset *a, struct dataset *b)
 {
-	int diff;
+	int diff, retval = 0;
 
 	if (a == b)
 		return 0;
@@ -85,10 +87,24 @@ int dscmp(struct dataset *a, struct dataset *b)
 	if (b && !a)
 		return B_BETTER;
 
+	pr_debug("dataset a: %d, %s, %d, %d, %d, %d, %d, %s, %s", a->priority1, cid2str(&a->identity),
+									a->quality.clockClass, a->quality.clockAccuracy,
+									a->quality.offsetScaledLogVariance,
+									a->priority2, a->stepsRemoved,
+									pid2str(&a->sender), pid2str(&a->receiver));
+	pr_debug("dataset b: %d, %s, %d, %d, %d, %d, %d, %s, %s", b->priority1, cid2str(&b->identity),
+									b->quality.clockClass, b->quality.clockAccuracy,
+									b->quality.offsetScaledLogVariance,
+									b->priority2, b->stepsRemoved,
+									pid2str(&b->sender), pid2str(&b->receiver));
+	
 	diff = memcmp(&a->identity, &b->identity, sizeof(a->identity));
 
-	if (!diff)
-		return dscmp2(a, b);
+	if (!diff) {
+		retval = dscmp2(a, b);
+		pr_debug("dscmp2(): %d", retval);
+		return retval;
+	}
 
 	if (a->priority1 < b->priority1)
 		return A_BETTER;
