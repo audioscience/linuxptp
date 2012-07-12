@@ -39,6 +39,9 @@
 #define SIGNALING             0xC
 #define MANAGEMENT            0xD
 
+/* TransportSpecific field value for IEEE802.1AS (gPTP) */
+#define TRANSPORT_GPTP (0x1 << 4)
+
 /* Bits for flagField[0] */
 #define ALT_MASTER     (1<<0)
 #define TWO_STEP       (1<<1)
