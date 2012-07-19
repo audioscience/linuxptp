@@ -84,9 +84,11 @@ static double pi_sample(struct servo *servo,
 		ki_term = s->ki * offset;
 		ppb = s->kp * offset + s->drift + ki_term;
 		if (ppb < -s->maxppb) {
-			ppb = -s->maxppb;
+			*state = SERVO_UNLOCKED;
+			s->count = 0;
 		} else if (ppb > s->maxppb) {
-			ppb = s->maxppb;
+			*state = SERVO_UNLOCKED;
+			s->count = 0;
 		} else {
 			s->drift += ki_term;
 		}
