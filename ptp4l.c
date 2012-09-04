@@ -227,6 +227,7 @@ int main(int argc, char *argv[])
 	}
 	if (ds->slaveOnly) {
 		ds->clockQuality.clockClass = 255;
+		ds->priority1 = 255;
 	}
 
 	print_set_verbose(cfg_settings.verbose);
