@@ -149,11 +149,13 @@ static inline unsigned int path_length(struct path_trace_tlv *p)
 	return p->length / sizeof(struct ClockIdentity);
 }
 
-typedef struct Integer96 {
+struct Integer96 {
 	uint16_t nanoseconds_msb;
 	uint64_t nanoseconds_lsb;
 	uint16_t fractional_nanoseconds;
-} PACKED ScaledNs;
+} PACKED;
+
+typedef struct Integer96 ScaledNs;
 
 struct follow_up_info_tlv {
 	Enumeration16 type;
