@@ -55,12 +55,12 @@ static void init_cfg_settings(void)
 	cfg_settings.pod.logMinDelayReqInterval = 0;
 	cfg_settings.pod.logMinPdelayReqInterval = 0;
 	cfg_settings.pod.announceReceiptTimeout = 3;
-	cfg_settings.pod.transportSpecific = 1;
+	cfg_settings.pod.transportSpecific = 1 << 4;
 	cfg_settings.pod.path_trace_enabled = 1;
 	cfg_settings.pod.follow_up_info = 1;
 
 	cfg_settings.timestamping = TS_HARDWARE;
-	cfg_settings.dm = DM_E2E;
+	cfg_settings.dm = DM_P2P;
 	cfg_settings.transport = TRANS_IEEE_802_3;
 
 	assume_two_step = 1;
