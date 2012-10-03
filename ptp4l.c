@@ -34,7 +34,7 @@
 
 int assume_two_step;
 
-static int running = 1;
+int running = 1;
 
 static struct config cfg_settings;
 
