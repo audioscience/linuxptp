@@ -18,22 +18,34 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include <stdlib.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
+#define USE_RTX 1
 
+/* pcap.h needs to come before winsock2.h */
 #include <pcap.h>
 
 #include <winsock2.h>
 #include <windows.h>
+#include <WinIoCtl.h>
 #include <assert.h>
+
+#include <stdlib.h>
+#include <stdint.h>
+#if USE_RTX
+#include <rtapi.h>
+#endif
+#include <stdio.h>
+#include <string.h>
 
 #include <iphlpapi.h>
 //#include "msvc_time.h"
 #include "msvc_syscall.h"
 #include "transport.h"
 
+#if USE_RTX
+#include "RtDriver.h"
+#include "Drvutl.h"
+#include "RtI210_ptp.h"
+#endif
 
 
 /* from linux/socket.h*/
