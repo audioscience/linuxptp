@@ -1458,7 +1458,14 @@ calc:
 static int process_pdelay_resp(struct port *p, struct ptp_message *m)
 {
 	if (p->peer_delay_resp) {
-		if (!source_pid_eq(p->peer_delay_resp, m)) {
+		int same_pid = source_pid_eq(p->peer_delay_resp, m);
+		int same_sid = (p->peer_delay_resp->header.sequenceId ==
+			m->header.sequenceId);
+		if (same_sid && same_pid) {
+			pr_err("port %hu: multiple identical peer responses", portnum(p));
+			return -1;
+		}
+		if (same_sid && !same_pid) {
 			pr_err("port %hu: multiple peer responses", portnum(p));
 			return -1;
 		}
