@@ -1162,22 +1162,23 @@ static int process_announce(struct port *p, struct ptp_message *m)
 	return result;
 }
 
-static int process_delay_req(struct port *p, struct ptp_message *m)
+static enum fsm_event process_delay_req(struct port *p, struct ptp_message *m)
 {
 	struct ptp_message *msg;
-	int cnt, err = 0, pdulen;
+	int cnt, pdulen;
+	enum fsm_event ev = EV_NONE;
 
 	if (p->state != PS_MASTER && p->state != PS_GRAND_MASTER)
-		return 0;
+		return EV_NONE;
 
 	if (p->delayMechanism == DM_P2P) {
 		pr_warning("port %hu: delay request on P2P port", portnum(p));
-		return 0;
+		return EV_NONE;
 	}
 
 	msg = msg_allocate();
 	if (!msg)
-		return -1;
+		return EV_FAULT_DETECTED;
 
 	pdulen = sizeof(struct delay_resp_msg);
 	msg->hwts.type = p->timestamping;
@@ -1197,17 +1198,17 @@ static int process_delay_req(struct port *p, struct ptp_message *m)
 	msg->delay_resp.requestingPortIdentity = m->header.sourcePortIdentity;
 
 	if (msg_pre_send(msg)) {
-		err = -1;
+		ev = EV_FAULT_DETECTED;
 		goto out;
 	}
 	cnt = transport_send(p->trp, &p->fda, 0, msg, pdulen, NULL);
 	if (cnt <= 0) {
 		pr_err("port %hu: send delay response failed", portnum(p));
-		err = -1;
+		ev = EV_FAULT_DETECTED;
 	}
 out:
 	msg_put(msg);
-	return err;
+	return ev;
 }
 
 static void process_delay_resp(struct port *p, struct ptp_message *m)
@@ -1291,14 +1292,15 @@ static void process_follow_up(struct port *p, struct ptp_message *m)
 			 syn->header.correction, m->header.correction);
 }
 
-static int process_pdelay_req(struct port *p, struct ptp_message *m)
+static enum fsm_event process_pdelay_req(struct port *p, struct ptp_message *m)
 {
 	struct ptp_message *rsp, *fup;
-	int cnt, err = -1, rsp_len, fup_len;
+	int cnt, rsp_len, fup_len;
+	enum fsm_event ev = EV_FAULT_DETECTED;
 
 	if (p->delayMechanism == DM_E2E) {
 		pr_warning("port %hu: pdelay_req on E2E port", portnum(p));
-		return 0;
+		return EV_NONE;
 	}
 	if (p->delayMechanism == DM_AUTO) {
 		pr_info("port %hu: peer detected, switch to P2P", portnum(p));
@@ -1307,11 +1309,11 @@ static int process_pdelay_req(struct port *p, struct ptp_message *m)
 
 	rsp = msg_allocate();
 	if (!rsp)
-		return -1;
+		return EV_FAULT_DETECTED;
 	fup = msg_allocate();
 	if (!fup) {
 		msg_put(rsp);
-		return -1;
+		return EV_FAULT_DETECTED;
 	}
 
 	rsp_len = sizeof(struct pdelay_resp_msg);
@@ -1377,11 +1379,11 @@ static int process_pdelay_req(struct port *p, struct ptp_message *m)
 		pr_err("port %hu: send pdelay_resp_fup failed", portnum(p));
 		goto out;
 	}
-	err = 0;
+	ev = EV_NONE;
 out:
 	msg_put(rsp);
 	msg_put(fup);
-	return err;
+	return ev;
 }
 
 static void port_peer_delay(struct port *p)
@@ -1455,7 +1457,7 @@ calc:
 	p->peer_delay_req = NULL;
 }
 
-static int process_pdelay_resp(struct port *p, struct ptp_message *m)
+static enum fsm_event process_pdelay_resp(struct port *p, struct ptp_message *m)
 {
 	if (p->peer_delay_resp) {
 		int same_pid = source_pid_eq(p->peer_delay_resp, m);
@@ -1463,16 +1465,16 @@ static int process_pdelay_resp(struct port *p, struct ptp_message *m)
 			m->header.sequenceId);
 		if (same_sid && same_pid) {
 			pr_err("port %hu: multiple identical peer responses", portnum(p));
-			return -1;
+			return EV_FAULT_DETECTED;
 		}
 		if (same_sid && !same_pid) {
 			pr_err("port %hu: multiple peer responses", portnum(p));
-			return -1;
+			return EV_FAULT_DETECTED;
 		}
 	}
 	if (!p->peer_delay_req) {
 		pr_err("port %hu: rogue peer delay response", portnum(p));
-		return -1;
+		return EV_FAULT_DETECTED;
 	}
 
 	if (p->peer_delay_resp) {
@@ -1481,7 +1483,7 @@ static int process_pdelay_resp(struct port *p, struct ptp_message *m)
 	msg_get(m);
 	p->peer_delay_resp = m;
 	port_peer_delay(p);
-	return 0;
+	return EV_NONE;
 }
 
 static void process_pdelay_resp_fup(struct port *p, struct ptp_message *m)
@@ -1776,16 +1778,13 @@ enum fsm_event port_event(struct port *p, int fd_index)
 		process_sync(p, msg);
 		break;
 	case DELAY_REQ:
-		if (process_delay_req(p, msg))
-			event = EV_FAULT_DETECTED;
+		event = process_delay_req(p, msg);
 		break;
 	case PDELAY_REQ:
-		if (process_pdelay_req(p, msg))
-			event = EV_FAULT_DETECTED;
+		event = process_pdelay_req(p, msg);
 		break;
 	case PDELAY_RESP:
-		if (process_pdelay_resp(p, msg))
-			event = EV_FAULT_DETECTED;
+		event = process_pdelay_resp(p, msg);
 		break;
 	case FOLLOW_UP:
 		process_follow_up(p, msg);
