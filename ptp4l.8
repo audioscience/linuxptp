@@ -188,6 +188,12 @@ value to -128 or to the special key word "ASAP" will let the fault be
 reset immediately.
 The default is 4 (16 seconds).
 .TP
+.B backoff_interval
+The time in seconds between the detection of a network misconfiguration and
+the fault being reset. The port is disabled for the duration of the backoff
+interval.
+The default is 300 (5 minutes).
+.TP
 .B delay_mechanism
 Select the delay mechanism. Possible values are E2E, P2P and Auto.
 The default is E2E.

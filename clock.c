@@ -73,6 +73,7 @@ struct clock {
 	struct pollfd pollfd[CLK_N_PORTS*N_CLOCK_PFD];
 	int fault_fd[CLK_N_PORTS];
 	int8_t fault_timeout[CLK_N_PORTS];
+	int backoff_interval[CLK_N_PORTS];
 	int nports; /* does not include the UDS port */
 	int free_running;
 	int freq_est_interval;
@@ -119,6 +120,13 @@ void clock_destroy(struct clock *c)
 	stats_destroy(c->stats.delay);
 	memset(c, 0, sizeof(*c));
 	msg_cleanup();
+}
+
+int clock_backoff_timeout(struct clock *c, int index)
+{
+	pr_debug("waiting %d seconds to clear fault on port %hu",
+		c->backoff_interval[index], index);
+	return set_tmo(c->fault_fd[index], c->backoff_interval[index], 0);
 }
 
 static int clock_fault_timeout(struct clock *c, int index, int set)
@@ -576,6 +584,7 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 
 	for (i = 0; i < count; i++) {
 		c->fault_timeout[i] = iface[i].pod.fault_reset_interval;
+		c->backoff_interval[i] = iface[i].pod.backoff_interval;
 		c->port[i] = port_open(phc_index, timestamping, 1+i, &iface[i], c);
 		if (!c->port[i]) {
 			pr_err("failed to open port %s", iface[i].name);
@@ -836,6 +845,10 @@ int clock_poll(struct clock *c)
 				/* Clear any fault after a little while. */
 				if (PS_FAULTY == port_state(c->port[i])) {
 					clock_fault_timeout(c, i, 1);
+					break;
+				}
+				if (PS_BACKOFF == port_state(c->port[i])) {
+					clock_backoff_timeout(c, i);
 					break;
 				}
 			}

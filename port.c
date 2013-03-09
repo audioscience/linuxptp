@@ -71,6 +71,8 @@ struct port {
 	int log_sync_interval;
 	struct nrate_estimator nrate;
 	unsigned int pdr_missing;
+	unsigned int multiple_seq_pdr_count;
+	unsigned int multiple_pdr_detected;
 	/* portDS */
 	struct port_defaults pod;
 	struct PortIdentity portIdentity;
@@ -382,6 +384,10 @@ static int port_capable(struct port *p)
 		return 1;
 	}
 
+	if (p->multiple_seq_pdr_count) {
+		return 0;
+	}
+
 	if (tmv_to_nanoseconds(p->peer_delay) >	p->neighborPropDelayThresh) {
 		return 0;
 	}
@@ -638,6 +644,8 @@ static void port_nrate_initialize(struct port *p)
 
 	/* We start in the 'incapable' state. */
 	p->pdr_missing = ALLOWED_LOST_RESPONSES + 1;
+	p->multiple_seq_pdr_count = 0;
+	p->multiple_pdr_detected = 0;
 
 	p->nrate.origin1 = tmv_zero();
 	p->nrate.ingress1 = tmv_zero();
@@ -779,6 +787,11 @@ static int port_delay_request(struct port *p)
 {
 	struct ptp_message *msg;
 	int cnt, pdulen;
+
+	/* If multiple pdelay resp were not detected the counter can be reset */
+	if (!p->multiple_pdr_detected)
+		p->multiple_seq_pdr_count = 0;
+	p->multiple_pdr_detected = 0;
 
 	/* Time to send a new request, forget current pdelay resp and fup */
 	if (p->peer_delay_resp) {
@@ -980,6 +993,7 @@ static int port_is_enabled(struct port *p)
 	switch (p->state) {
 	case PS_INITIALIZING:
 	case PS_FAULTY:
+	case PS_BACKOFF:
 	case PS_DISABLED:
 		return 0;
 	case PS_LISTENING:
@@ -1145,6 +1159,7 @@ static int process_announce(struct port *p, struct ptp_message *m)
 	switch (p->state) {
 	case PS_INITIALIZING:
 	case PS_FAULTY:
+	case PS_BACKOFF:
 	case PS_DISABLED:
 		break;
 	case PS_LISTENING:
@@ -1247,6 +1262,7 @@ static void process_follow_up(struct port *p, struct ptp_message *m)
 	switch (p->state) {
 	case PS_INITIALIZING:
 	case PS_FAULTY:
+	case PS_BACKOFF:
 	case PS_DISABLED:
 	case PS_LISTENING:
 	case PS_PRE_MASTER:
@@ -1469,7 +1485,15 @@ static enum fsm_event process_pdelay_resp(struct port *p, struct ptp_message *m)
 		}
 		if (same_sid && !same_pid) {
 			pr_err("port %hu: multiple peer responses", portnum(p));
-			return EV_FAULT_DETECTED;
+			if (!p->multiple_pdr_detected) {
+				p->multiple_pdr_detected = 1;
+				p->multiple_seq_pdr_count++;
+			}
+			if (p->multiple_seq_pdr_count >= 3) {
+				return EV_MISCONFIGURED_NET_DETECTED;
+			} else {
+				return EV_NONE;
+			}
 		}
 	}
 	if (!p->peer_delay_req) {
@@ -1506,6 +1530,7 @@ static void process_sync(struct port *p, struct ptp_message *m)
 	switch (p->state) {
 	case PS_INITIALIZING:
 	case PS_FAULTY:
+	case PS_BACKOFF:
 	case PS_DISABLED:
 	case PS_LISTENING:
 	case PS_PRE_MASTER:
@@ -1605,6 +1630,7 @@ static void port_e2e_transition(struct port *p, enum port_state next)
 	switch (next) {
 	case PS_INITIALIZING:
 		break;
+	case PS_BACKOFF:
 	case PS_FAULTY:
 	case PS_DISABLED:
 		port_disable(p);
@@ -1642,6 +1668,7 @@ static void port_p2p_transition(struct port *p, enum port_state next)
 	switch (next) {
 	case PS_INITIALIZING:
 		break;
+	case PS_BACKOFF:
 	case PS_FAULTY:
 	case PS_DISABLED:
 		port_disable(p);

@@ -30,6 +30,7 @@ enum port_state ptp_fsm(enum port_state state, enum fsm_event event, int mdiff)
 		next = PS_LISTENING;
 		break;
 
+	case PS_BACKOFF:
 	case PS_FAULTY:
 		switch (event) {
 		case EV_DESIGNATED_DISABLED:
@@ -55,6 +56,9 @@ enum port_state ptp_fsm(enum port_state state, enum fsm_event event, int mdiff)
 			break;
 		case EV_FAULT_DETECTED:
 			next = PS_FAULTY;
+			break;
+		case EV_MISCONFIGURED_NET_DETECTED:
+			next = PS_BACKOFF;
 			break;
 		case EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES:
 			next = PS_MASTER;
@@ -84,6 +88,9 @@ enum port_state ptp_fsm(enum port_state state, enum fsm_event event, int mdiff)
 		case EV_FAULT_DETECTED:
 			next = PS_FAULTY;
 			break;
+		case EV_MISCONFIGURED_NET_DETECTED:
+			next = PS_BACKOFF;
+			break;
 		case EV_QUALIFICATION_TIMEOUT_EXPIRES:
 			next = PS_MASTER;
 			break;
@@ -107,6 +114,9 @@ enum port_state ptp_fsm(enum port_state state, enum fsm_event event, int mdiff)
 		case EV_FAULT_DETECTED:
 			next = PS_FAULTY;
 			break;
+		case EV_MISCONFIGURED_NET_DETECTED:
+			next = PS_BACKOFF;
+			break;
 		case EV_RS_SLAVE:
 			next = PS_UNCALIBRATED;
 			break;
@@ -125,6 +135,9 @@ enum port_state ptp_fsm(enum port_state state, enum fsm_event event, int mdiff)
 			break;
 		case EV_FAULT_DETECTED:
 			next = PS_FAULTY;
+			break;
+		case EV_MISCONFIGURED_NET_DETECTED:
+			next = PS_BACKOFF;
 			break;
 		case EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES:
 			next = PS_MASTER;
@@ -150,6 +163,9 @@ enum port_state ptp_fsm(enum port_state state, enum fsm_event event, int mdiff)
 			break;
 		case EV_FAULT_DETECTED:
 			next = PS_FAULTY;
+			break;
+		case EV_MISCONFIGURED_NET_DETECTED:
+			next = PS_BACKOFF;
 			break;
 		case EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES:
 			next = PS_MASTER;
@@ -181,6 +197,9 @@ enum port_state ptp_fsm(enum port_state state, enum fsm_event event, int mdiff)
 			break;
 		case EV_FAULT_DETECTED:
 			next = PS_FAULTY;
+			break;
+		case EV_MISCONFIGURED_NET_DETECTED:
+			next = PS_BACKOFF;
 			break;
 		case EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES:
 			next = PS_MASTER;
@@ -223,6 +242,7 @@ enum port_state ptp_slave_fsm(enum port_state state, enum fsm_event event,
 		next = PS_LISTENING;
 		break;
 
+	case PS_BACKOFF:
 	case PS_FAULTY:
 		switch (event) {
 		case EV_DESIGNATED_DISABLED:
@@ -249,6 +269,9 @@ enum port_state ptp_slave_fsm(enum port_state state, enum fsm_event event,
 		case EV_FAULT_DETECTED:
 			next = PS_FAULTY;
 			break;
+		case EV_MISCONFIGURED_NET_DETECTED:
+			next = PS_BACKOFF;
+			break;
 		case EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES:
 		case EV_RS_MASTER:
 		case EV_RS_GRAND_MASTER:
@@ -271,6 +294,9 @@ enum port_state ptp_slave_fsm(enum port_state state, enum fsm_event event,
 		case EV_FAULT_DETECTED:
 			next = PS_FAULTY;
 			break;
+		case EV_MISCONFIGURED_NET_DETECTED:
+			next = PS_BACKOFF;
+			break;
 		case EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES:
 		case EV_RS_MASTER:
 		case EV_RS_GRAND_MASTER:
@@ -292,6 +318,9 @@ enum port_state ptp_slave_fsm(enum port_state state, enum fsm_event event,
 			break;
 		case EV_FAULT_DETECTED:
 			next = PS_FAULTY;
+			break;
+		case EV_MISCONFIGURED_NET_DETECTED:
+			next = PS_BACKOFF;
 			break;
 		case EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES:
 		case EV_RS_MASTER:

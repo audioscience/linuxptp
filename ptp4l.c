@@ -80,6 +80,7 @@ static struct config cfg_settings = {
 		.follow_up_info = 0,
 		.freq_est_interval = 1,
 		.fault_reset_interval = 4,
+		.backoff_interval = 300,
 		/* Default to very a large neighborPropDelay threshold */
 		.neighborPropDelayThresh = 20000000,
 	},

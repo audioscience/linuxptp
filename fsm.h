@@ -32,6 +32,7 @@ enum port_state {
 	PS_UNCALIBRATED,
 	PS_SLAVE,
 	PS_GRAND_MASTER, /*non-standard extension*/
+	PS_BACKOFF,
 };
 
 /** Defines the events for the port state machine. */
@@ -52,6 +53,7 @@ enum fsm_event {
 	EV_RS_GRAND_MASTER,
 	EV_RS_SLAVE,
 	EV_RS_PASSIVE,
+	EV_MISCONFIGURED_NET_DETECTED,
 };
 
 /**

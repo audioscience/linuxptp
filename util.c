@@ -34,6 +34,7 @@ char *ps_str[] = {
 	"UNCALIBRATED",
 	"SLAVE",
 	"GRAND_MASTER",
+	"BACKOFF",
 };
 
 char *ev_str[] = {
@@ -53,6 +54,7 @@ char *ev_str[] = {
 	"RS_GRAND_MASTER",
 	"RS_SLAVE",
 	"RS_PASSIVE",
+	"MISCONFIGURED_NET_DETECTED",
 };
 
 char *cid2str(struct ClockIdentity *id)
