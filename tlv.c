@@ -17,6 +17,7 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #include <arpa/inet.h>
+#include <errno.h>
 #include <string.h>
 
 #include "port.h"
@@ -51,7 +52,7 @@ static uint16_t flip16(uint16_t *p) {
 }
 
 static int mgt_post_recv(struct management_tlv *m, uint16_t data_len,
-                         struct tlv_extra *extra)
+			 struct tlv_extra *extra)
 {
 	struct defaultDS *dds;
 	struct currentDS *cds;
@@ -59,54 +60,117 @@ static int mgt_post_recv(struct management_tlv *m, uint16_t data_len,
 	struct timePropertiesDS *tp;
 	struct portDS *p;
 	struct time_status_np *tsn;
+	struct grandmaster_settings_np *gsn;
 	struct mgmt_clock_description *cd;
-	int extra_len = 0;
+	int extra_len = 0, len;
 	uint8_t *buf;
 	uint16_t u16;
 	switch (m->id) {
 	case CLOCK_DESCRIPTION:
 		cd = &extra->cd;
 		buf = m->data;
+		len = data_len;
 
 		cd->clockType = (UInteger16 *) buf;
-		flip16(cd->clockType);
 		buf += sizeof(*cd->clockType);
+		len -= sizeof(*cd->clockType);
+		if (len < 0)
+			goto bad_length;
+		flip16(cd->clockType);
 
 		cd->physicalLayerProtocol = (struct PTPText *) buf;
 		buf += sizeof(struct PTPText);
-                buf += cd->physicalLayerProtocol->length;
+		len -= sizeof(struct PTPText);
+		if (len < 0)
+			goto bad_length;
+
+		buf += cd->physicalLayerProtocol->length;
+		len -= cd->physicalLayerProtocol->length;
+		if (len < 0)
+			goto bad_length;
 
 		cd->physicalAddress = (struct PhysicalAddress *) buf;
+		buf += sizeof(struct PhysicalAddress);
+		len -= sizeof(struct PhysicalAddress);
+		if (len < 0)
+			goto bad_length;
+
 		u16 = flip16(&cd->physicalAddress->length);
 		if (u16 > TRANSPORT_ADDR_LEN)
 			goto bad_length;
-		buf += sizeof(struct PhysicalAddress) + u16;
+		buf += u16;
+		len -= u16;
+		if (len < 0)
+			goto bad_length;
 
 		cd->protocolAddress = (struct PortAddress *) buf;
+		buf += sizeof(struct PortAddress);
+		len -= sizeof(struct PortAddress);
+		if (len < 0)
+			goto bad_length;
+
 		flip16(&cd->protocolAddress->networkProtocol);
 		u16 = flip16(&cd->protocolAddress->addressLength);
 		if (u16 > TRANSPORT_ADDR_LEN)
 			goto bad_length;
-		buf += sizeof(struct PortAddress) + u16;
+		buf += u16;
+		len -= u16;
+		if (len < 0)
+			goto bad_length;
 
 		cd->manufacturerIdentity = buf;
 		buf += OUI_LEN + 1;
+		len -= OUI_LEN + 1;
+		if (len < 0)
+			goto bad_length;
 
 		cd->productDescription = (struct PTPText *) buf;
-		buf += sizeof(struct PTPText) + cd->productDescription->length;
+		buf += sizeof(struct PTPText);
+		len -= sizeof(struct PTPText);
+		if (len < 0)
+			goto bad_length;
+
+		buf += cd->productDescription->length;
+		len -= cd->productDescription->length;
+		if (len < 0)
+			goto bad_length;
+
 		cd->revisionData = (struct PTPText *) buf;
-		buf += sizeof(struct PTPText) + cd->revisionData->length;
+		buf += sizeof(struct PTPText);
+		len -= sizeof(struct PTPText);
+		if (len < 0)
+			goto bad_length;
+
+		buf += cd->revisionData->length;
+		len -= cd->revisionData->length;
+		if (len < 0)
+			goto bad_length;
+
 		cd->userDescription = (struct PTPText *) buf;
-		buf += sizeof(struct PTPText) + cd->userDescription->length;
+		buf += sizeof(struct PTPText);
+		len -= sizeof(struct PTPText);
+		if (len < 0)
+			goto bad_length;
+
+		buf += cd->userDescription->length;
+		len -= cd->userDescription->length;
+		if (len < 0)
+			goto bad_length;
 
 		cd->profileIdentity = buf;
 		buf += PROFILE_ID_LEN;
+		len -= PROFILE_ID_LEN;
+		if (len < 0)
+			goto bad_length;
+
 		extra_len = buf - m->data;
 		break;
 	case USER_DESCRIPTION:
-          extra->cd.userDescription = (struct PTPText *) m->data;
+		if (data_len < sizeof(struct PTPText))
+			goto bad_length;
+		extra->cd.userDescription = (struct PTPText *) m->data;
 		extra_len = sizeof(struct PTPText);
-                extra_len += extra->cd.userDescription->length;
+		extra_len += extra->cd.userDescription->length;
 		break;
 	case DEFAULT_DATA_SET:
 		if (data_len != sizeof(struct defaultDS))
@@ -162,6 +226,14 @@ static int mgt_post_recv(struct management_tlv *m, uint16_t data_len,
 		scaled_ns_n2h(&tsn->lastGmPhaseChange);
 		tsn->gmPresent = ntohl(tsn->gmPresent);
 		break;
+	case GRANDMASTER_SETTINGS_NP:
+		if (data_len != sizeof(struct grandmaster_settings_np))
+			goto bad_length;
+		gsn = (struct grandmaster_settings_np *) m->data;
+		gsn->clockQuality.offsetScaledLogVariance =
+			ntohs(gsn->clockQuality.offsetScaledLogVariance);
+		gsn->utc_offset = ntohs(gsn->utc_offset);
+		break;
 	}
 	if (extra_len) {
 		if (extra_len % 2)
@@ -171,7 +243,7 @@ static int mgt_post_recv(struct management_tlv *m, uint16_t data_len,
 	}
 	return 0;
 bad_length:
-	return -1;
+	return -EBADMSG;
 }
 
 static void mgt_pre_send(struct management_tlv *m, struct tlv_extra *extra)
@@ -182,6 +254,7 @@ static void mgt_pre_send(struct management_tlv *m, struct tlv_extra *extra)
 	struct timePropertiesDS *tp;
 	struct portDS *p;
 	struct time_status_np *tsn;
+	struct grandmaster_settings_np *gsn;
 	struct mgmt_clock_description *cd;
 	switch (m->id) {
 	case CLOCK_DESCRIPTION:
@@ -235,6 +308,12 @@ static void mgt_pre_send(struct management_tlv *m, struct tlv_extra *extra)
 		scaled_ns_h2n(&tsn->lastGmPhaseChange);
 		tsn->gmPresent = htonl(tsn->gmPresent);
 		break;
+	case GRANDMASTER_SETTINGS_NP:
+		gsn = (struct grandmaster_settings_np *) m->data;
+		gsn->clockQuality.offsetScaledLogVariance =
+			htons(gsn->clockQuality.offsetScaledLogVariance);
+		gsn->utc_offset = htons(gsn->utc_offset);
+		break;
 	}
 }
 
@@ -260,7 +339,7 @@ static int org_post_recv(struct organization_tlv *org)
 	}
 	return 0;
 bad_length:
-	return -1;
+	return -EBADMSG;
 }
 
 static void org_pre_send(struct organization_tlv *org)
@@ -335,7 +414,7 @@ int tlv_post_recv(struct TLV *tlv, struct tlv_extra *extra)
 	}
 	return result;
 bad_length:
-	return -1;
+	return -EBADMSG;
 }
 
 void tlv_pre_send(struct TLV *tlv, struct tlv_extra *extra)

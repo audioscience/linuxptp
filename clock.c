@@ -79,6 +79,9 @@ struct clock {
 	int utc_timescale;
 	int leap_set;
 	int kernel_leap;
+	int utc_offset;  /* grand master role */
+	int time_flags;  /* grand master role */
+	int time_source; /* grand master role */
 	enum servo_state servo_state;
 	tmv_t master_offset;
 	tmv_t path_delay;
@@ -129,7 +132,7 @@ static int clock_fault_timeout(struct clock *c, int index, int set)
 	struct fault_interval i;
 
 	if (!set) {
-		pr_debug("clearing fault on port %d", index);
+		pr_debug("clearing fault on port %d", index + 1);
 		return set_tmo_lin(c->fault_fd[index], 0);
 	}
 
@@ -137,11 +140,11 @@ static int clock_fault_timeout(struct clock *c, int index, int set)
 
 	if (i.type == FTMO_LINEAR_SECONDS) {
 		pr_debug("waiting %d seconds to clear fault on port %d",
-			 i.val, index);
+			 i.val, index + 1);
 		return set_tmo_lin(c->fault_fd[index], i.val);
 	} else if (i.type == FTMO_LOG2_SECONDS) {
 		pr_debug("waiting 2^{%d} seconds to clear fault on port %d",
-			 i.val, index);
+			 i.val, index + 1);
 		return set_tmo_log(c->fault_fd[index], 1, i.val);
 	}
 
@@ -171,6 +174,7 @@ static int clock_management_get_response(struct clock *c, struct port *p,
 	struct management_tlv_datum *mtd;
 	struct ptp_message *rsp;
 	struct time_status_np *tsn;
+	struct grandmaster_settings_np *gsn;
 	struct PortIdentity pid = port_identity(p);
 	struct PTPText *text;
 
@@ -270,6 +274,15 @@ static int clock_management_get_response(struct clock *c, struct port *p,
 		datalen = sizeof(*tsn);
 		respond = 1;
 		break;
+	case GRANDMASTER_SETTINGS_NP:
+		gsn = (struct grandmaster_settings_np *) tlv->data;
+		gsn->clockQuality = c->dds.clockQuality;
+		gsn->utc_offset = c->utc_offset;
+		gsn->time_flags = c->time_flags;
+		gsn->time_source = c->time_source;
+		datalen = sizeof(*gsn);
+		respond = 1;
+		break;
 	}
 	if (respond) {
 		if (datalen % 2) {
@@ -292,24 +305,32 @@ out:
 }
 
 static int clock_management_set(struct clock *c, struct port *p,
-				int id, struct ptp_message *req)
+				int id, struct ptp_message *req, int *changed)
 {
 	int respond = 0;
+	struct management_tlv *tlv;
+	struct grandmaster_settings_np *gsn;
+
+	tlv = (struct management_tlv *) req->management.suffix;
+
 	switch (id) {
+	case GRANDMASTER_SETTINGS_NP:
+		if (p != c->port[c->nports]) {
+			/* Sorry, only allowed on the UDS port. */
+			break;
+		}
+		gsn = (struct grandmaster_settings_np *) tlv->data;
+		c->dds.clockQuality = gsn->clockQuality;
+		c->utc_offset = gsn->utc_offset;
+		c->time_flags = gsn->time_flags;
+		c->time_source = gsn->time_source;
+		*changed = 1;
+		respond = 1;
+		break;
 	}
 	if (respond && !clock_management_get_response(c, p, id, req))
 		pr_err("failed to send management set response");
 	return respond ? 1 : 0;
-}
-
-static int clock_master_lost(struct clock *c)
-{
-	int i;
-	for (i = 0; i < c->nports; i++) {
-		if (PS_SLAVE == port_state(c->port[i]))
-			return 0;
-	}
-	return 1;
 }
 
 static void clock_stats_update(struct clock_stats *s,
@@ -430,13 +451,9 @@ static void clock_update_grandmaster(struct clock *c)
 	pds->grandmasterPriority1               = c->dds.priority1;
 	pds->grandmasterPriority2               = c->dds.priority2;
 	c->dad.path_length                      = 0;
-	c->tds.currentUtcOffset                 = CURRENT_UTC_OFFSET;
-	if (c->utc_timescale) {
-		c->tds.flags = 0;
-	} else {
-		c->tds.flags = PTP_TIMESCALE;
-	}
-	c->tds.timeSource                       = INTERNAL_OSCILLATOR;
+	c->tds.currentUtcOffset                 = c->utc_offset;
+	c->tds.flags                            = c->time_flags;
+	c->tds.timeSource                       = c->time_source;
 }
 
 static void clock_update_slave(struct clock *c)
@@ -508,7 +525,7 @@ static int clock_utc_correct(struct clock *c, tmv_t ingress)
 						&leap, &utc_offset);
 		if (c->leap_set != clock_leap) {
 			if (c->kernel_leap)
-				clockadj_set_leap(c->clkid, clock_leap);
+				sysclk_set_leap(clock_leap);
 			c->leap_set = clock_leap;
 		}
 	}
@@ -570,10 +587,15 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 	c->free_running = dds->free_running;
 	c->freq_est_interval = dds->freq_est_interval;
 	c->kernel_leap = dds->kernel_leap;
+	c->utc_offset = CURRENT_UTC_OFFSET;
+	c->time_source = dds->time_source;
 	c->desc = dds->clock_desc;
 
 	if (c->free_running) {
 		c->clkid = CLOCK_INVALID;
+		if (timestamping == TS_SOFTWARE || timestamping == TS_LEGACY_HW) {
+			c->utc_timescale = 1;
+		}
 	} else if (phc_index >= 0) {
 		snprintf(phc, 31, "/dev/ptp%d", phc_index);
 		c->clkid = phc_open(phc);
@@ -589,14 +611,18 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 	} else {
 		c->clkid = CLOCK_REALTIME;
 		c->utc_timescale = 1;
-		max_adj = 512000;
-		clockadj_set_leap(c->clkid, 0);
+		max_adj = sysclk_max_freq();
+		sysclk_set_leap(0);
 	}
 	c->leap_set = 0;
-	c->kernel_leap = dds->kernel_leap;
+	c->time_flags = c->utc_timescale ? 0 : PTP_TIMESCALE;
 
 	if (c->clkid != CLOCK_INVALID) {
 		fadj = (int) clockadj_get_freq(c->clkid);
+		/* Due to a bug in older kernels, the reading may silently fail
+		   and return 0. Set the frequency back to make sure fadj is
+		   the actual frequency of the clock. */
+		clockadj_set_freq(c->clkid, fadj);
 	}
 	c->servo = servo_create(servo, -fadj, max_adj, sw_ts);
 	if (!c->servo) {
@@ -731,7 +757,7 @@ void clock_install_fda(struct clock *c, struct port *p, struct fdarray fda)
 
 static void clock_forward_mgmt_msg(struct clock *c, struct port *p, struct ptp_message *msg)
 {
-	int i, pdulen, msg_ready = 0;
+	int i, pdulen = 0, msg_ready = 0;
 	struct port *fwd;
 	if (forwarding(c, p) && msg->management.boundaryHops) {
 		for (i = 0; i < c->nports + 1; i++) {
@@ -746,7 +772,7 @@ static void clock_forward_mgmt_msg(struct clock *c, struct port *p, struct ptp_m
 					msg_pre_send(msg);
 				}
 				if (port_forward(fwd, msg, pdulen))
-					pr_err("port %d: management forward failed", i);
+					pr_err("port %d: management forward failed", i + 1);
 			}
 		}
 		if (msg_ready) {
@@ -756,9 +782,9 @@ static void clock_forward_mgmt_msg(struct clock *c, struct port *p, struct ptp_m
 	}
 }
 
-void clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
+int clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 {
-	int i;
+	int changed = 0, i;
 	struct management_tlv *mgt;
 	struct ClockIdentity *tcid, wildcard = {
 		{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
@@ -770,10 +796,10 @@ void clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 	/* Apply this message to the local clock and ports. */
 	tcid = &msg->management.targetPortIdentity.clockIdentity;
 	if (!cid_eq(tcid, &wildcard) && !cid_eq(tcid, &c->dds.clockIdentity)) {
-		return;
+		return changed;
 	}
 	if (msg->tlv_count != 1) {
-		return;
+		return changed;
 	}
 	mgt = (struct management_tlv *) msg->management.suffix;
 
@@ -785,29 +811,25 @@ void clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 	*/
 	switch (management_action(msg)) {
 	case GET:
-		if (mgt->length != 2) {
-			clock_management_send_error(p, msg, WRONG_LENGTH);
-			return;
-		}
 		if (clock_management_get_response(c, p, mgt->id, msg))
-			return;
+			return changed;
 		break;
 	case SET:
 		if (mgt->length == 2 && mgt->id != NULL_MANAGEMENT) {
 			clock_management_send_error(p, msg, WRONG_LENGTH);
-			return;
+			return changed;
 		}
-		if (clock_management_set(c, p, mgt->id, msg))
-			return;
+		if (clock_management_set(c, p, mgt->id, msg, &changed))
+			return changed;
 		break;
 	case COMMAND:
 		if (mgt->length != 2) {
 			clock_management_send_error(p, msg, WRONG_LENGTH);
-			return;
+			return changed;
 		}
 		break;
 	default:
-		return;
+		return changed;
 	}
 
 	switch (mgt->id) {
@@ -842,6 +864,7 @@ void clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 	case TRANSPARENT_CLOCK_DEFAULT_DATA_SET:
 	case PRIMARY_DOMAIN:
 	case TIME_STATUS_NP:
+	case GRANDMASTER_SETTINGS_NP:
 		clock_management_send_error(p, msg, NOT_SUPPORTED);
 		break;
 	default:
@@ -851,6 +874,7 @@ void clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 		}
 		break;
 	}
+	return changed;
 }
 
 struct parent_ds *clock_parent_ds(struct clock *c)
@@ -865,7 +889,7 @@ struct PortIdentity clock_parent_identity(struct clock *c)
 
 int clock_poll(struct clock *c)
 {
-	int cnt, err, i, j, k, lost = 0, sde = 0;
+	int cnt, err, i, j, k, sde = 0;
 	enum fsm_event event;
 
 	cnt = poll(c->pollfd, ARRAY_SIZE(c->pollfd), -1);
@@ -890,7 +914,7 @@ int clock_poll(struct clock *c)
 				if (EV_STATE_DECISION_EVENT == event)
 					sde = 1;
 				if (EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES == event)
-					lost = 1;
+					sde = 1;
 				err = port_dispatch(c->port[i], event, 0);
 				/* Clear any fault after a little while. */
 				if (PS_FAULTY == port_state(c->port[i])) {
@@ -913,11 +937,11 @@ int clock_poll(struct clock *c)
 		k = N_CLOCK_PFD * i + j;
 		if (c->pollfd[k].revents & (POLLIN|POLLPRI)) {
 			event = port_event(c->port[i], j);
+			if (EV_STATE_DECISION_EVENT == event)
+				sde = 1;
 		}
 	}
 
-	if (lost && clock_master_lost(c))
-		clock_update_grandmaster(c);
 	if (sde)
 		handle_state_decision_event(c);
 
@@ -1063,6 +1087,8 @@ enum servo_state clock_synchronize(struct clock *c,
 		break;
 	case SERVO_LOCKED:
 		clockadj_set_freq(c->clkid, -adj);
+		if (c->clkid == CLOCK_REALTIME)
+			sysclk_set_sync();
 		break;
 	}
 	return state;
@@ -1089,6 +1115,8 @@ void clock_sync_interval(struct clock *c, int n)
 		pr_warning("summary_interval is too long");
 	}
 	c->stats.max_count = (1 << shift);
+
+	servo_sync_interval(c->servo, n < 0 ? 1.0 / (1 << -n) : 1 << n);
 }
 
 struct timePropertiesDS *clock_time_properties(struct clock *c)
@@ -1096,9 +1124,15 @@ struct timePropertiesDS *clock_time_properties(struct clock *c)
 	return &c->tds;
 }
 
+void clock_update_time_properties(struct clock *c, struct timePropertiesDS tds)
+{
+	c->tds = tds;
+}
+
 static void handle_state_decision_event(struct clock *c)
 {
 	struct foreign_clock *best = NULL, *fc;
+	struct ClockIdentity best_id;
 	int fresh_best = 0, i;
 
 	for (i = 0; i < c->nports; i++) {
@@ -1109,20 +1143,24 @@ static void handle_state_decision_event(struct clock *c)
 			best = fc;
 	}
 
-	if (!best)
-		return;
+	if (best) {
+		best_id = best->dataset.identity;
+	} else {
+		best_id = c->dds.clockIdentity;
+	}
 
 	pr_notice("selected best master clock %s",
-		cid2str(&best->dataset.identity));
+		  cid2str(&best_id));
 
-	if (!cid_eq(&best->dataset.identity, &c->best_id)) {
+	if (!cid_eq(&best_id, &c->best_id)) {
 		clock_freq_est_reset(c);
 		mave_reset(c->avg_delay);
+		c->path_delay = 0;
 		fresh_best = 1;
 	}
 
 	c->best = best;
-	c->best_id = best->dataset.identity;
+	c->best_id = best_id;
 
 	for (i = 0; i < c->nports; i++) {
 		enum port_state ps;
@@ -1133,6 +1171,7 @@ static void handle_state_decision_event(struct clock *c)
 			event = EV_NONE;
 			break;
 		case PS_GRAND_MASTER:
+			pr_notice("assuming the grand master role");
 			clock_update_grandmaster(c);
 			event = EV_RS_GRAND_MASTER;
 			break;

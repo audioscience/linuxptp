@@ -46,6 +46,14 @@ struct interface {
 #define CFG_IGNORE_USE_SYSLOG   (1 << 5)
 #define CFG_IGNORE_VERBOSE      (1 << 6)
 
+enum parser_result {
+	PARSED_OK,
+	NOT_PARSED,
+	BAD_VALUE,
+	MALFORMED,
+	OUT_OF_RANGE,
+};
+
 struct config {
 	/* configuration override */
 	int cfg_ignore;
@@ -61,13 +69,22 @@ struct config {
 	struct default_ds dds;
 	struct port_defaults pod;
 	int *assume_two_step;
-	int *tx_timestamp_retries;
+	int *tx_timestamp_timeout;
+	int *check_fup_sync;
 
 	enum servo_type clock_servo;
 
 	double *pi_proportional_const;
 	double *pi_integral_const;
+	double *pi_proportional_scale;
+	double *pi_proportional_exponent;
+	double *pi_proportional_norm_max;
+	double *pi_integral_scale;
+	double *pi_integral_exponent;
+	double *pi_integral_norm_max;
 	double *pi_offset_const;
+	double *pi_f_offset_const;
+	int *pi_max_frequency;
 
 	unsigned char *ptp_dst_mac;
 	unsigned char *p2p_dst_mac;

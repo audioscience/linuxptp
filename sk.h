@@ -47,6 +47,13 @@ struct sk_ts_info {
 int sk_interface_index(int fd, char *device);
 
 /**
+ * Prepare a given socket for PTP "general" messages.
+ * @param fd  An open socket.
+ * @return    Zero on success, non-zero otherwise.
+ */
+int sk_general_init(int fd);
+
+/**
  * Obtain supported timestamping information
  * @param name	    The name of the interface
  * @param info      Struct containing obtained timestamping information.
@@ -97,9 +104,16 @@ int sk_timestamping_init(int fd, char *device, enum timestamp_type type,
 			 enum transport_type transport);
 
 /**
- * Limits the number of RECVMSG(2) calls when attempting to obtain a
- * transmit time stamp on an event message.
+ * Limits the time that RECVMSG(2) will poll while waiting for the tx timestamp
+ * if MSG_ERRQUEUE is set. Specified in milliseconds.
  */
-extern int sk_tx_retries;
+extern int sk_tx_timeout;
+
+/**
+ * Enables the SO_TIMESTAMPNS socket option on the both the event and
+ * general sockets in order to test the order of paired sync and
+ * follow up messages using their network stack receipt time stamps.
+ */
+extern int sk_check_fupsync;
 
 #endif

@@ -39,6 +39,19 @@
 #define ALLOWED_LOST_RESPONSES 3
 #define PORT_MAVE_LENGTH 10
 
+enum syfu_state {
+	SF_EMPTY,
+	SF_HAVE_SYNC,
+	SF_HAVE_FUP,
+};
+
+enum syfu_event {
+	SYNC_MISMATCH,
+	SYNC_MATCH,
+	FUP_MISMATCH,
+	FUP_MATCH,
+};
+
 struct nrate_estimator {
 	double ratio;
 	tmv_t origin1;
@@ -54,8 +67,8 @@ struct port {
 	enum timestamp_type timestamping;
 	struct fdarray fda;
 	struct foreign_clock *best;
-	struct ptp_message *last_follow_up;
-	struct ptp_message *last_sync;
+	enum syfu_state syfu;
+	struct ptp_message *last_syncfup;
 	struct ptp_message *delay_req;
 	struct ptp_message *peer_delay_req;
 	struct ptp_message *peer_delay_resp;
@@ -84,6 +97,7 @@ struct port {
 	TimeInterval        peerMeanPathDelay;
 	Integer8            logAnnounceInterval;
 	UInteger8           announceReceiptTimeout;
+	UInteger8           syncReceiptTimeout;
 	UInteger8           transportSpecific;
 	Integer8            logSyncInterval;
 	Enumeration8        delayMechanism;
@@ -350,6 +364,21 @@ static void free_foreign_masters(struct port *p)
 		fc_clear(fc);
 		free(fc);
 	}
+}
+
+static int fup_sync_ok(struct ptp_message *fup, struct ptp_message *sync)
+{
+	int64_t tfup, tsync;
+	tfup = tmv_to_nanoseconds(timespec_to_tmv(fup->hwts.sw));
+	tsync = tmv_to_nanoseconds(timespec_to_tmv(sync->hwts.sw));
+	/*
+	 * NB - If the sk_check_fupsync option is not enabled, then
+	 * both of these time stamps will be zero.
+	 */
+	if (tfup < tsync) {
+		return 0;
+	}
+	return 1;
 }
 
 static int incapable_ignore(struct port *p, struct ptp_message *m)
@@ -787,9 +816,15 @@ static int port_set_qualification_tmo(struct port *p)
 		       1+clock_steps_removed(p->clock), p->logAnnounceInterval);
 }
 
-static int port_set_sync_tmo(struct port *p)
+static int port_set_sync_rx_tmo(struct port *p)
 {
-	return set_tmo_log(p->fda.fd[FD_SYNC_TIMER], 1, p->logSyncInterval);
+	return set_tmo_log(p->fda.fd[FD_SYNC_RX_TIMER],
+			   p->syncReceiptTimeout, p->logSyncInterval);
+}
+
+static int port_set_sync_tx_tmo(struct port *p)
+{
+	return set_tmo_log(p->fda.fd[FD_SYNC_TX_TIMER], 1, p->logSyncInterval);
 }
 
 static void port_show_transition(struct port *p,
@@ -819,6 +854,8 @@ static void port_synchronize(struct port *p,
 {
 	enum servo_state state;
 
+	port_set_sync_rx_tmo(p);
+
 	state = clock_synchronize(p->clock, ingress_ts, origin_ts,
 				  correction1, correction2);
 	switch (state) {
@@ -838,6 +875,91 @@ static void port_synchronize(struct port *p,
 		break;
 	case SERVO_LOCKED:
 		port_dispatch(p, EV_MASTER_CLOCK_SELECTED, 0);
+		break;
+	}
+}
+
+/*
+ * Handle out of order packets. The network stack might
+ * provide the follow up _before_ the sync message. After all,
+ * they can arrive on two different ports. In addition, time
+ * stamping in PHY devices might delay the event packets.
+ */
+static void port_syfufsm(struct port *p, enum syfu_event event,
+			 struct ptp_message *m)
+{
+	struct ptp_message *syn, *fup;
+
+	switch (p->syfu) {
+	case SF_EMPTY:
+		switch (event) {
+		case SYNC_MISMATCH:
+			msg_get(m);
+			p->last_syncfup = m;
+			p->syfu = SF_HAVE_SYNC;
+			break;
+		case FUP_MISMATCH:
+			msg_get(m);
+			p->last_syncfup = m;
+			p->syfu = SF_HAVE_FUP;
+			break;
+		case SYNC_MATCH:
+			break;
+		case FUP_MATCH:
+			break;
+		}
+		break;
+
+	case SF_HAVE_SYNC:
+		switch (event) {
+		case SYNC_MISMATCH:
+			msg_put(p->last_syncfup);
+			msg_get(m);
+			p->last_syncfup = m;
+			break;
+		case SYNC_MATCH:
+			break;
+		case FUP_MISMATCH:
+			msg_put(p->last_syncfup);
+			msg_get(m);
+			p->last_syncfup = m;
+			p->syfu = SF_HAVE_FUP;
+			break;
+		case FUP_MATCH:
+			syn = p->last_syncfup;
+			port_synchronize(p, syn->hwts.ts, m->ts.pdu,
+					 syn->header.correction,
+					 m->header.correction);
+			msg_put(p->last_syncfup);
+			p->syfu = SF_EMPTY;
+			break;
+		}
+		break;
+
+	case SF_HAVE_FUP:
+		switch (event) {
+		case SYNC_MISMATCH:
+			msg_put(p->last_syncfup);
+			msg_get(m);
+			p->last_syncfup = m;
+			p->syfu = SF_HAVE_SYNC;
+			break;
+		case SYNC_MATCH:
+			fup = p->last_syncfup;
+			port_synchronize(p, m->hwts.ts, fup->ts.pdu,
+					 m->header.correction,
+					 fup->header.correction);
+			msg_put(p->last_syncfup);
+			p->syfu = SF_EMPTY;
+			break;
+		case FUP_MISMATCH:
+			msg_put(p->last_syncfup);
+			msg_get(m);
+			p->last_syncfup = m;
+			break;
+		case FUP_MATCH:
+			break;
+		}
 		break;
 	}
 }
@@ -1115,22 +1237,24 @@ static int port_is_enabled(struct port *p)
 	return 1;
 }
 
-static void port_disable(struct port *p)
+static void flush_last_sync(struct port *p)
 {
-	int i;
+	if (p->syfu != SF_EMPTY) {
+		msg_put(p->last_syncfup);
+		p->syfu = SF_EMPTY;
+	}
+}
 
-	if (p->last_follow_up) {
-		msg_put(p->last_follow_up);
-		p->last_follow_up = NULL;
-	}
-	if (p->last_sync) {
-		msg_put(p->last_sync);
-		p->last_sync = NULL;
-	}
+static void flush_delay_req(struct port *p)
+{
 	if (p->delay_req) {
 		msg_put(p->delay_req);
 		p->delay_req = NULL;
 	}
+}
+
+static void flush_peer_delay(struct port *p)
+{
 	if (p->peer_delay_req) {
 		msg_put(p->peer_delay_req);
 		p->peer_delay_req = NULL;
@@ -1143,6 +1267,15 @@ static void port_disable(struct port *p)
 		msg_put(p->peer_delay_fup);
 		p->peer_delay_fup = NULL;
 	}
+}
+
+static void port_disable(struct port *p)
+{
+	int i;
+
+	flush_last_sync(p);
+	flush_delay_req(p);
+	flush_peer_delay(p);
 
 	p->best = NULL;
 	free_foreign_masters(p);
@@ -1165,6 +1298,7 @@ static int port_initialize(struct port *p)
 	p->peerMeanPathDelay       = 0;
 	p->logAnnounceInterval     = p->pod.logAnnounceInterval;
 	p->announceReceiptTimeout  = p->pod.announceReceiptTimeout;
+	p->syncReceiptTimeout      = p->pod.syncReceiptTimeout;
 	p->transportSpecific       = p->pod.transportSpecific;
 	p->logSyncInterval         = p->pod.logSyncInterval;
 	p->logMinPdelayReqInterval = p->pod.logMinPdelayReqInterval;
@@ -1231,10 +1365,17 @@ static int update_current_master(struct port *p, struct ptp_message *m)
 	struct ptp_message *tmp;
 	struct parent_ds *dad;
 	struct path_trace_tlv *ptt;
+	struct timePropertiesDS tds;
 
 	if (!msg_source_equal(m, fc))
 		return add_foreign_master(p, m);
 
+	if (p->state != PS_PASSIVE) {
+		tds.currentUtcOffset = m->announce.currentUtcOffset;
+		tds.flags = m->header.flagField[1];
+		tds.timeSource = m->announce.timeSource;
+		clock_update_time_properties(p->clock, tds);
+	}
 	if (p->pod.path_trace_enabled) {
 		ptt = (struct path_trace_tlv *) m->announce.suffix;
 		dad = clock_parent_ds(p->clock);
@@ -1266,6 +1407,13 @@ struct dataset *port_best_foreign(struct port *port)
 static int process_announce(struct port *p, struct ptp_message *m)
 {
 	int result = 0;
+
+	/* Do not qualify announce messages with stepsRemoved >= 255, see
+	 * IEEE1588-2008 section 9.3.2.5 (d)
+	 */
+	if (m->announce.stepsRemoved >= 255)
+		return result;
+
 	switch (p->state) {
 	case PS_INITIALIZING:
 	case PS_FAULTY:
@@ -1275,9 +1423,9 @@ static int process_announce(struct port *p, struct ptp_message *m)
 	case PS_PRE_MASTER:
 	case PS_MASTER:
 	case PS_GRAND_MASTER:
-	case PS_PASSIVE:
 		result = add_foreign_master(p, m);
 		break;
+	case PS_PASSIVE:
 	case PS_UNCALIBRATED:
 	case PS_SLAVE:
 		result = update_current_master(p, m);
@@ -1365,8 +1513,8 @@ static void process_delay_resp(struct port *p, struct ptp_message *m)
 
 static void process_follow_up(struct port *p, struct ptp_message *m)
 {
-	struct ptp_message *syn;
-	struct PortIdentity master, *pid;
+	enum syfu_event event;
+	struct PortIdentity master;
 	switch (p->state) {
 	case PS_INITIALIZING:
 	case PS_FAULTY:
@@ -1392,27 +1540,13 @@ static void process_follow_up(struct port *p, struct ptp_message *m)
 		clock_follow_up_info(p->clock, fui);
 	}
 
-	/*
-	 * Handle out of order packets. The network stack might
-	 * provide the follow up _before_ the sync message. After all,
-	 * they can arrive on two different ports. In addition, time
-	 * stamping in PHY devices might delay the event packets.
-	 */
-	syn = p->last_sync;
-	if (!syn || syn->header.sequenceId != m->header.sequenceId) {
-		if (p->last_follow_up)
-			msg_put(p->last_follow_up);
-		msg_get(m);
-		p->last_follow_up = m;
-		return;
+	if (p->syfu == SF_HAVE_SYNC &&
+	    p->last_syncfup->header.sequenceId == m->header.sequenceId) {
+		event = FUP_MATCH;
+	} else {
+		event = FUP_MISMATCH;
 	}
-
-	pid = &syn->header.sourcePortIdentity;
-	if (memcmp(pid, &m->header.sourcePortIdentity, sizeof(*pid)))
-		return;
-
-	port_synchronize(p, syn->hwts.ts, m->ts.pdu,
-			 syn->header.correction, m->header.correction);
+	port_syfufsm(p, event, m);
 }
 
 static int process_pdelay_req(struct port *p, struct ptp_message *m)
@@ -1653,7 +1787,7 @@ static void process_pdelay_resp_fup(struct port *p, struct ptp_message *m)
 
 static void process_sync(struct port *p, struct ptp_message *m)
 {
-	struct ptp_message *fup;
+	enum syfu_event event;
 	struct PortIdentity master;
 	switch (p->state) {
 	case PS_INITIALIZING:
@@ -1684,24 +1818,18 @@ static void process_sync(struct port *p, struct ptp_message *m)
 	if (one_step(m)) {
 		port_synchronize(p, m->hwts.ts, m->ts.pdu,
 				 m->header.correction, 0);
+		flush_last_sync(p);
 		return;
 	}
-	/*
-	 * Check if follow up arrived first.
-	 */
-	fup = p->last_follow_up;
-	if (fup && fup->header.sequenceId == m->header.sequenceId) {
-		port_synchronize(p, m->hwts.ts, fup->ts.pdu,
-				 m->header.correction, fup->header.correction);
-		return;
+
+	if (p->syfu == SF_HAVE_FUP &&
+	    fup_sync_ok(p->last_syncfup, m) &&
+	    p->last_syncfup->header.sequenceId == m->header.sequenceId) {
+		event = SYNC_MATCH;
+	} else {
+		event = SYNC_MISMATCH;
 	}
-	/*
-	 * Remember this sync for two step operation.
-	 */
-	if (p->last_sync)
-		msg_put(p->last_sync);
-	msg_get(m);
-	p->last_sync = m;
+	port_syfufsm(p, event, m);
 }
 
 /* public methods */
@@ -1749,10 +1877,11 @@ struct foreign_clock *port_compute_best(struct port *p)
 static void port_e2e_transition(struct port *p, enum port_state next)
 {
 	port_clr_tmo(p->fda.fd[FD_ANNOUNCE_TIMER]);
+	port_clr_tmo(p->fda.fd[FD_SYNC_RX_TIMER]);
 	port_clr_tmo(p->fda.fd[FD_DELAY_TIMER]);
 	port_clr_tmo(p->fda.fd[FD_QUALIFICATION_TIMER]);
 	port_clr_tmo(p->fda.fd[FD_MANNO_TIMER]);
-	port_clr_tmo(p->fda.fd[FD_SYNC_TIMER]);
+	port_clr_tmo(p->fda.fd[FD_SYNC_TX_TIMER]);
 
 	switch (next) {
 	case PS_INITIALIZING:
@@ -1769,15 +1898,19 @@ static void port_e2e_transition(struct port *p, enum port_state next)
 		break;
 	case PS_MASTER:
 	case PS_GRAND_MASTER:
-		port_set_manno_tmo(p);
-		port_set_sync_tmo(p);
+		set_tmo_log(p->fda.fd[FD_MANNO_TIMER], 1, -10); /*~1ms*/
+		port_set_sync_tx_tmo(p);
 		break;
 	case PS_PASSIVE:
 		port_set_announce_tmo(p);
 		break;
 	case PS_UNCALIBRATED:
+		flush_last_sync(p);
+		flush_delay_req(p);
+		/* fall through */
 	case PS_SLAVE:
 		port_set_announce_tmo(p);
+		port_set_sync_rx_tmo(p);
 		port_set_delay_tmo(p);
 		break;
 	};
@@ -1786,10 +1919,11 @@ static void port_e2e_transition(struct port *p, enum port_state next)
 static void port_p2p_transition(struct port *p, enum port_state next)
 {
 	port_clr_tmo(p->fda.fd[FD_ANNOUNCE_TIMER]);
+	port_clr_tmo(p->fda.fd[FD_SYNC_RX_TIMER]);
 	/* Leave FD_DELAY_TIMER running. */
 	port_clr_tmo(p->fda.fd[FD_QUALIFICATION_TIMER]);
 	port_clr_tmo(p->fda.fd[FD_MANNO_TIMER]);
-	port_clr_tmo(p->fda.fd[FD_SYNC_TIMER]);
+	port_clr_tmo(p->fda.fd[FD_SYNC_TX_TIMER]);
 
 	switch (next) {
 	case PS_INITIALIZING:
@@ -1806,15 +1940,19 @@ static void port_p2p_transition(struct port *p, enum port_state next)
 		break;
 	case PS_MASTER:
 	case PS_GRAND_MASTER:
-		port_set_manno_tmo(p);
-		port_set_sync_tmo(p);
+		set_tmo_log(p->fda.fd[FD_MANNO_TIMER], 1, -10); /*~1ms*/
+		port_set_sync_tx_tmo(p);
 		break;
 	case PS_PASSIVE:
 		port_set_announce_tmo(p);
 		break;
 	case PS_UNCALIBRATED:
+		flush_last_sync(p);
+		flush_peer_delay(p);
+		/* fall through */
 	case PS_SLAVE:
 		port_set_announce_tmo(p);
+		port_set_sync_rx_tmo(p);
 		break;
 	};
 }
@@ -1823,6 +1961,7 @@ int port_dispatch(struct port *p, enum fsm_event event, int mdiff)
 {
 	enum port_state next;
 	struct fault_interval i;
+	int fri_asap = 0;
 
 	if (clock_slave_only(p->clock)) {
 		if (event == EV_RS_MASTER || event == EV_RS_GRAND_MASTER) {
@@ -1833,9 +1972,10 @@ int port_dispatch(struct port *p, enum fsm_event event, int mdiff)
 		next = ptp_fsm(p->state, event, mdiff);
 	}
 
-	fault_interval(p, last_fault_type(p), &i);
-	int fri_asap = (i.val == FRI_ASAP && i.type == FTMO_LOG2_SECONDS) ||
-		(i.val == 0 && i.type == FTMO_LINEAR_SECONDS);
+	if (!fault_interval(p, last_fault_type(p), &i) &&
+	    ((i.val == FRI_ASAP && i.type == FTMO_LOG2_SECONDS) ||
+	     (i.val == 0 && i.type == FTMO_LINEAR_SECONDS)))
+		fri_asap = 1;
 	if (PS_INITIALIZING == next || (PS_FAULTY == next && fri_asap)) {
 		/*
 		 * This is a special case. Since we initialize the
@@ -1873,15 +2013,18 @@ enum fsm_event port_event(struct port *p, int fd_index)
 {
 	enum fsm_event event = EV_NONE;
 	struct ptp_message *msg;
-	int cnt, fd = p->fda.fd[fd_index];
+	int cnt, fd = p->fda.fd[fd_index], err;
 
 	switch (fd_index) {
 	case FD_ANNOUNCE_TIMER:
-		pr_debug("port %hu: announce timeout", portnum(p));
+	case FD_SYNC_RX_TIMER:
+		pr_debug("port %hu: %s timeout", portnum(p),
+			 fd_index == FD_SYNC_RX_TIMER ? "rx sync" : "announce");
 		if (p->best)
 			fc_clear(p->best);
 		port_set_announce_tmo(p);
-		if (clock_slave_only(p->clock) && port_renew_transport(p)) {
+		if (clock_slave_only(p->clock) && p->delayMechanism != DM_P2P &&
+		    port_renew_transport(p)) {
 			return EV_FAULT_DETECTED;
 		}
 		return EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES;
@@ -1900,9 +2043,9 @@ enum fsm_event port_event(struct port *p, int fd_index)
 		port_set_manno_tmo(p);
 		return port_tx_announce(p) ? EV_FAULT_DETECTED : EV_NONE;
 
-	case FD_SYNC_TIMER:
+	case FD_SYNC_TX_TIMER:
 		pr_debug("port %hu: master sync timeout", portnum(p));
-		port_set_sync_tmo(p);
+		port_set_sync_tx_tmo(p);
 		return port_tx_sync(p) ? EV_FAULT_DETECTED : EV_NONE;
 	}
 
@@ -1918,8 +2061,19 @@ enum fsm_event port_event(struct port *p, int fd_index)
 		msg_put(msg);
 		return EV_FAULT_DETECTED;
 	}
-	if (msg_post_recv(msg, cnt)) {
-		pr_err("port %hu: bad message", portnum(p));
+	err = msg_post_recv(msg, cnt);
+	if (err) {
+		switch (err) {
+		case -EBADMSG:
+			pr_err("port %hu: bad message", portnum(p));
+			break;
+		case -ETIME:
+			pr_err("port %hu: received %s without timestamp",
+				portnum(p), msg_type_string(msg_type(msg)));
+			break;
+		case -EPROTO:
+			pr_debug("port %hu: ignoring message", portnum(p));
+		}
 		msg_put(msg);
 		return EV_NONE;
 	}
@@ -1960,7 +2114,8 @@ enum fsm_event port_event(struct port *p, int fd_index)
 	case SIGNALING:
 		break;
 	case MANAGEMENT:
-		clock_manage(p->clock, p, msg);
+		if (clock_manage(p->clock, p, msg))
+			event = EV_STATE_DECISION_EVENT;
 		break;
 	}
 

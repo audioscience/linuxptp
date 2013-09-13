@@ -28,13 +28,15 @@
 #include <unistd.h>
 #include <ifaddrs.h>
 #include <stdlib.h>
+#include <poll.h>
 
 #include "print.h"
 #include "sk.h"
 
 /* globals */
 
-int sk_tx_retries = 100;
+int sk_tx_timeout = 1;
+int sk_check_fupsync;
 
 /* private methods */
 
@@ -88,6 +90,16 @@ int sk_interface_index(int fd, char *name)
 		return err;
 	}
 	return ifreq.ifr_ifindex;
+}
+
+int sk_general_init(int fd)
+{
+	int on = sk_check_fupsync ? 1 : 0;
+	if (setsockopt(fd, SOL_SOCKET, SO_TIMESTAMPNS, &on, sizeof(on)) < 0) {
+		pr_err("ioctl SO_TIMESTAMPNS failed: %m");
+		return -1;
+	}
+	return 0;
 }
 
 int sk_get_ts_info(char *name, struct sk_ts_info *sk_info)
@@ -192,7 +204,7 @@ int sk_interface_addr(char *name, int family, uint8_t *addr, int len)
 			break;
 		}
 	}
-	free(ifaddr);
+	freeifaddrs(ifaddr);
 	return result;
 }
 
@@ -200,11 +212,11 @@ int sk_receive(int fd, void *buf, int buflen,
 	       struct hw_timestamp *hwts, int flags)
 {
 	char control[256];
-	int cnt, level, try_again, type;
+	int cnt = 0, res = 0, level, type;
 	struct cmsghdr *cm;
 	struct iovec iov = { buf, buflen };
 	struct msghdr msg;
-	struct timespec *ts = NULL;
+	struct timespec *sw, *ts = NULL;
 
 	memset(control, 0, sizeof(control));
 	memset(&msg, 0, sizeof(msg));
@@ -213,28 +225,23 @@ int sk_receive(int fd, void *buf, int buflen,
 	msg.msg_control = control;
 	msg.msg_controllen = sizeof(control);
 
-	try_again = flags == MSG_ERRQUEUE ? sk_tx_retries : 1;
-
-	for ( ; try_again; try_again--) {
-		cnt = recvmsg(fd, &msg, flags);
-		if (cnt >= 0) {
-			break;
-		}
-		if (errno == EINTR) {
-			try_again++;
-		} else if (errno == EAGAIN) {
-			usleep(1);
-		} else {
-			break;
+	if (flags == MSG_ERRQUEUE) {
+		struct pollfd pfd = { fd, 0, 0 };
+		res = poll(&pfd, 1, sk_tx_timeout);
+		if (res < 1) {
+			pr_err(res ? "poll tx timestamp failed: %m" :
+			             "poll tx timestamp timeout");
+			return res;
+		} else if (!(pfd.revents & POLLERR)) {
+			pr_err("poll tx woke up on non ERR event");
+			return -1;
 		}
 	}
 
-	if (cnt < 1) {
-		if (flags == MSG_ERRQUEUE)
-			pr_err("recvmsg tx timestamp failed: %m");
-		else
-			pr_err("recvmsg failed: %m");
-	}
+	cnt = recvmsg(fd, &msg, flags);
+	if (cnt < 1)
+		pr_err("recvmsg%sfailed: %m",
+		       flags == MSG_ERRQUEUE ? " tx timestamp " : " ");
 
 	for (cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm)) {
 		level = cm->cmsg_level;
@@ -245,7 +252,14 @@ int sk_receive(int fd, void *buf, int buflen,
 				return -1;
 			}
 			ts = (struct timespec *) CMSG_DATA(cm);
-			break;
+		}
+		if (SOL_SOCKET == level && SO_TIMESTAMPNS == type) {
+			if (cm->cmsg_len < sizeof(*sw)) {
+				pr_warning("short SO_TIMESTAMPNS message");
+				return -1;
+			}
+			sw = (struct timespec *) CMSG_DATA(cm);
+			hwts->sw = *sw;
 		}
 	}
 
@@ -272,7 +286,7 @@ int sk_receive(int fd, void *buf, int buflen,
 int sk_timestamping_init(int fd, char *device, enum timestamp_type type,
 			 enum transport_type transport)
 {
-	int err, filter1, filter2, flags, one_step;
+	int err, filter1, filter2 = 0, flags, one_step;
 
 	switch (type) {
 	case TS_SOFTWARE:
@@ -326,6 +340,11 @@ int sk_timestamping_init(int fd, char *device, enum timestamp_type type,
 	if (setsockopt(fd, SOL_SOCKET, SO_TIMESTAMPING,
 		       &flags, sizeof(flags)) < 0) {
 		pr_err("ioctl SO_TIMESTAMPING failed: %m");
+		return -1;
+	}
+
+	/* Enable the sk_check_fupsync option, perhaps. */
+	if (sk_general_init(fd)) {
 		return -1;
 	}
 

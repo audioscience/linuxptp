@@ -54,6 +54,7 @@ static struct config cfg_settings = {
 		.freq_est_interval = 1,
 		.stats_interval = 0,
 		.kernel_leap = 1,
+		.time_source = INTERNAL_OSCILLATOR,
 		.clock_desc = {
 			.productDescription = {
 				.max_symbols = 64,
@@ -76,6 +77,7 @@ static struct config cfg_settings = {
 		.logMinDelayReqInterval = 0,
 		.logMinPdelayReqInterval = 0,
 		.announceReceiptTimeout = 3,
+		.syncReceiptTimeout = 0,
 		.transportSpecific = 0,
 		.path_trace_enabled = 0,
 		.follow_up_info = 0,
@@ -89,13 +91,22 @@ static struct config cfg_settings = {
 	.transport = TRANS_UDP_IPV4,
 
 	.assume_two_step = &assume_two_step,
-	.tx_timestamp_retries = &sk_tx_retries,
+	.tx_timestamp_timeout = &sk_tx_timeout,
+	.check_fup_sync = &sk_check_fupsync,
 
 	.clock_servo = CLOCK_SERVO_PI,
 
 	.pi_proportional_const = &configured_pi_kp,
 	.pi_integral_const = &configured_pi_ki,
+	.pi_proportional_scale = &configured_pi_kp_scale,
+	.pi_proportional_exponent = &configured_pi_kp_exponent,
+	.pi_proportional_norm_max = &configured_pi_kp_norm_max,
+	.pi_integral_scale = &configured_pi_ki_scale,
+	.pi_integral_exponent = &configured_pi_ki_exponent,
+	.pi_integral_norm_max = &configured_pi_ki_norm_max,
 	.pi_offset_const = &configured_pi_offset,
+	.pi_f_offset_const = &configured_pi_f_offset,
+	.pi_max_frequency = &configured_pi_max_freq,
 
 	.ptp_dst_mac = ptp_dst_mac,
 	.p2p_dst_mac = p2p_dst_mac,
@@ -236,7 +247,9 @@ int main(int argc, char *argv[])
 			*cfg_ignore |= CFG_IGNORE_SLAVEONLY;
 			break;
 		case 'l':
-			cfg_settings.print_level = atoi(optarg);
+			if (get_arg_val_i(c, optarg, &cfg_settings.print_level,
+					  PRINT_LEVEL_MIN, PRINT_LEVEL_MAX))
+				return -1;
 			*cfg_ignore |= CFG_IGNORE_PRINT_LEVEL;
 			break;
 		case 'm':
@@ -324,7 +337,7 @@ int main(int argc, char *argv[])
 	/* check whether timestamping mode is supported. */
 	for (i = 0; i < cfg_settings.nports; i++) {
 		if (iface[i].ts_info.valid &&
-		    !(iface[0].ts_info.so_timestamping & required_modes)) {
+		    ((iface[i].ts_info.so_timestamping & required_modes) != required_modes)) {
 			fprintf(stderr, "interface '%s' does not support "
 				        "requested timestamping mode.\n",
 				iface[i].name);

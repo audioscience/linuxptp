@@ -16,7 +16,9 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+#include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sk.h"
@@ -78,6 +80,22 @@ char *pid2str(struct PortIdentity *id)
 		 ptr[4], ptr[5], ptr[6], ptr[7],
 		 id->portNumber);
 	return buf;
+}
+
+int str2pid(const char *s, struct PortIdentity *result)
+{
+	struct PortIdentity pid;
+	unsigned char *ptr = pid.clockIdentity.id;
+	int c;
+	c = sscanf(s, " %02hhx%02hhx%02hhx.%02hhx%02hhx.%02hhx%02hhx%02hhx-%hu",
+		   &ptr[0], &ptr[1], &ptr[2], &ptr[3],
+		   &ptr[4], &ptr[5], &ptr[6], &ptr[7],
+		   &pid.portNumber);
+	if (c == 9) {
+		*result = pid;
+		return 0;
+	}
+	return -1;
 }
 
 int generate_clock_identity(struct ClockIdentity *ci, char *name)
@@ -189,4 +207,105 @@ int leap_second_status(uint64_t ts, int leap_set, int *leap, int *utc_offset)
 	}
 
 	return leap_status;
+}
+
+enum parser_result get_ranged_int(const char *str_val, int *result,
+				  int min, int max)
+{
+	long parsed_val;
+	char *endptr = NULL;
+	errno = 0;
+	parsed_val = strtol(str_val, &endptr, 0);
+	if (*endptr != '\0' || endptr == str_val)
+		return MALFORMED;
+	if (errno == ERANGE || parsed_val < min || parsed_val > max)
+		return OUT_OF_RANGE;
+	*result = parsed_val;
+	return PARSED_OK;
+}
+
+enum parser_result get_ranged_uint(const char *str_val, unsigned int *result,
+				   unsigned int min, unsigned int max)
+{
+	unsigned long parsed_val;
+	char *endptr = NULL;
+	errno = 0;
+	parsed_val = strtoul(str_val, &endptr, 0);
+	if (*endptr != '\0' || endptr == str_val)
+		return MALFORMED;
+	if (errno == ERANGE || parsed_val < min || parsed_val > max)
+		return OUT_OF_RANGE;
+	*result = parsed_val;
+	return PARSED_OK;
+}
+
+enum parser_result get_ranged_double(const char *str_val, double *result,
+				     double min, double max)
+{
+	double parsed_val;
+	char *endptr = NULL;
+	errno = 0;
+	parsed_val = strtod(str_val, &endptr);
+	if (*endptr != '\0' || endptr == str_val)
+		return MALFORMED;
+	if (errno == ERANGE || parsed_val < min || parsed_val > max)
+		return OUT_OF_RANGE;
+	*result = parsed_val;
+	return PARSED_OK;
+}
+
+int get_arg_val_i(int op, const char *optarg, int *val, int min, int max)
+{
+	enum parser_result r;
+	r = get_ranged_int(optarg, val, min, max);
+	if (r == MALFORMED) {
+		fprintf(stderr,
+			"-%c: %s is a malformed value\n", op, optarg);
+		return -1;
+	}
+	if (r == OUT_OF_RANGE) {
+		fprintf(stderr,
+			"-%c: %s is out of range. Must be in the range %d to %d\n",
+			op, optarg, min, max);
+		return -1;
+	}
+	return 0;
+}
+
+int get_arg_val_ui(int op, const char *optarg, unsigned int *val,
+		   unsigned int min, unsigned int max)
+{
+	enum parser_result r;
+	r = get_ranged_uint(optarg, val, min, max);
+	if (r == MALFORMED) {
+		fprintf(stderr,
+			"-%c: %s is a malformed value\n", op, optarg);
+		return -1;
+	}
+	if (r == OUT_OF_RANGE) {
+		fprintf(stderr,
+			"-%c: %s is out of range. Must be in the range %u to %u\n",
+			op, optarg, min, max);
+		return -1;
+	}
+	return 0;
+}
+
+int get_arg_val_d(int op, const char *optarg, double *val,
+		  double min, double max)
+{
+	enum parser_result r;
+	r = get_ranged_double(optarg, val, min, max);
+	if (r == MALFORMED) {
+		fprintf(stderr,
+			"-%c: %s is a malformed value\n", op, optarg);
+		return -1;
+	}
+	if (r == OUT_OF_RANGE) {
+		fprintf(stderr,
+			"-%c: %s is out of range. Must be in the range %e to %e\n",
+			op, optarg, min, max);
+		return -1;
+	}
+	return 0;
 }

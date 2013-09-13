@@ -18,8 +18,11 @@
 KBUILD_OUTPUT ?= /lib/modules/$(shell uname -r)/build
 
 FEAT_CFLAGS :=
-ifneq ($(shell grep clock_adjtime /usr/include/bits/time.h),)
+ifneq ($(shell grep --no-messages clock_adjtime /usr/include/bits/time.h),)
 FEAT_CFLAGS += -D_GNU_SOURCE -DHAVE_CLOCK_ADJTIME
+endif
+ifneq ($(shell grep --no-messages HWTSTAMP_TX_ONESTEP_SYNC $(KBUILD_OUTPUT)/usr/include/linux/net_tstamp.h),)
+FEAT_CFLAGS += -DHAVE_ONESTEP_SYNC
 endif
 
 DEBUG	=
@@ -52,8 +55,9 @@ ptp4l: $(OBJ)
 pmc: msg.o pmc.o pmc_common.o print.o raw.o sk.o tlv.o transport.o udp.o \
  udp6.o uds.o util.o version.o
 
-phc2sys: clockadj.o msg.o phc2sys.o pmc_common.o print.o pi.o servo.o raw.o \
- sk.o stats.o sysoff.o tlv.o transport.o udp.o udp6.o uds.o util.o version.o
+phc2sys: clockadj.o msg.o phc.o phc2sys.o pi.o pmc_common.o print.o servo.o \
+ raw.o sk.o stats.o sysoff.o tlv.o transport.o udp.o udp6.o uds.o util.o \
+ version.o
 
 hwstamp_ctl: hwstamp_ctl.o version.o
 

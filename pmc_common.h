@@ -27,7 +27,7 @@ struct pmc;
 
 struct pmc *pmc_create(enum transport_type transport_type, char *iface_name,
 		       UInteger8 boundary_hops, UInteger8 domain_number,
-		       UInteger8 transport_specific);
+		       UInteger8 transport_specific, int zero_datalen);
 
 void pmc_destroy(struct pmc *pmc);
 
@@ -35,6 +35,10 @@ int pmc_get_transport_fd(struct pmc *pmc);
 
 int pmc_send_get_action(struct pmc *pmc, int id);
 
+int pmc_send_set_action(struct pmc *pmc, int id, void *data, int datasize);
+
 struct ptp_message *pmc_recv(struct pmc *pmc);
+
+int pmc_target(struct pmc *pmc, struct PortIdentity *pid);
 
 #endif

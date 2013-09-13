@@ -17,6 +17,7 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -26,20 +27,43 @@
 #include "util.h"
 #include "pmc_common.h"
 
+/*
+   Field                  Len  Type
+  --------------------------------------------------------
+   clockType                2
+   physicalLayerProtocol    1  PTPText
+   physicalAddressLength    2  UInteger16
+   physicalAddress          0
+   protocolAddress          4  Enumeration16 + UInteger16
+   manufacturerIdentity     3
+   reserved                 1
+   productDescription       1  PTPText
+   revisionData             1  PTPText
+   userDescription          1  PTPText
+   profileIdentity          6
+  --------------------------------------------------------
+   TOTAL                   22
+*/
+#define EMPTY_CLOCK_DESCRIPTION 22
+/* Includes one extra byte to make length even. */
+#define EMPTY_PTP_TEXT 2
+
 struct pmc {
 	UInteger16 sequence_id;
 	UInteger8 boundary_hops;
 	UInteger8 domain_number;
 	UInteger8 transport_specific;
 	struct PortIdentity port_identity;
+	struct PortIdentity target;
 
 	struct transport *transport;
 	struct fdarray fdarray;
+	int zero_length_gets;
 };
 
 struct pmc *pmc_create(enum transport_type transport_type, char *iface_name,
 		       UInteger8 boundary_hops, UInteger8 domain_number,
-		       UInteger8 transport_specific)
+		       UInteger8 transport_specific, int zero_datalen)
 {
 	struct pmc *pmc;
 
@@ -53,8 +77,9 @@ struct pmc *pmc_create(enum transport_type transport_type, char *iface_name,
 		pr_err("failed to generate a clock identity");
 		goto failed;
 	}
-
 	pmc->port_identity.portNumber = 1;
+	memset(&pmc->target, 0xff, sizeof(pmc->target));
+
 	pmc->boundary_hops = boundary_hops;
 	pmc->domain_number = domain_number;
 	pmc->transport_specific = transport_specific;
@@ -69,6 +94,7 @@ struct pmc *pmc_create(enum transport_type transport_type, char *iface_name,
 		pr_err("failed to open transport");
 		goto failed;
 	}
+	pmc->zero_length_gets = zero_datalen ? 1 : 0;
 
 	return pmc;
 
@@ -107,8 +133,7 @@ static struct ptp_message *pmc_message(struct pmc *pmc, uint8_t action)
 	msg->header.control            = CTL_MANAGEMENT;
 	msg->header.logMessageInterval = 0x7f;
 
-	memset(&msg->management.targetPortIdentity, 0xff,
-	       sizeof(msg->management.targetPortIdentity));
+	msg->management.targetPortIdentity = pmc->target;
 	msg->management.startingBoundaryHops = pmc->boundary_hops;
 	msg->management.boundaryHops = pmc->boundary_hops;
 	msg->management.flags = action;
@@ -133,6 +158,64 @@ static int pmc_send(struct pmc *pmc, struct ptp_message *msg, int pdulen)
 	return 0;
 }
 
+static int pmc_tlv_datalen(struct pmc *pmc, int id)
+{
+	int len = 0;
+
+	if (pmc->zero_length_gets)
+		return len;
+
+	switch (id) {
+	case USER_DESCRIPTION:
+		len += EMPTY_PTP_TEXT;
+		break;
+	case DEFAULT_DATA_SET:
+		len += sizeof(struct defaultDS);
+		break;
+	case CURRENT_DATA_SET:
+		len += sizeof(struct currentDS);
+		break;
+	case PARENT_DATA_SET:
+		len += sizeof(struct parentDS);
+		break;
+	case TIME_PROPERTIES_DATA_SET:
+		len += sizeof(struct timePropertiesDS);
+		break;
+	case PRIORITY1:
+	case PRIORITY2:
+	case DOMAIN:
+	case SLAVE_ONLY:
+	case CLOCK_ACCURACY:
+	case TRACEABILITY_PROPERTIES:
+	case TIMESCALE_PROPERTIES:
+		len += sizeof(struct management_tlv_datum);
+		break;
+	case TIME_STATUS_NP:
+		len += sizeof(struct time_status_np);
+		break;
+	case GRANDMASTER_SETTINGS_NP:
+		len += sizeof(struct grandmaster_settings_np);
+		break;
+	case NULL_MANAGEMENT:
+		break;
+	case CLOCK_DESCRIPTION:
+		len += EMPTY_CLOCK_DESCRIPTION;
+		break;
+	case PORT_DATA_SET:
+		len += sizeof(struct portDS);
+		break;
+	case LOG_ANNOUNCE_INTERVAL:
+	case ANNOUNCE_RECEIPT_TIMEOUT:
+	case LOG_SYNC_INTERVAL:
+	case VERSION_NUMBER:
+	case DELAY_MECHANISM:
+	case LOG_MIN_PDELAY_REQ_INTERVAL:
+		len += sizeof(struct management_tlv_datum);
+		break;
+	}
+	return len;
+}
+
 int pmc_get_transport_fd(struct pmc *pmc)
 {
 	return pmc->fdarray.fd[FD_GENERAL];
@@ -140,7 +223,7 @@ int pmc_get_transport_fd(struct pmc *pmc)
 
 int pmc_send_get_action(struct pmc *pmc, int id)
 {
-	int pdulen;
+	int datalen, pdulen;
 	struct ptp_message *msg;
 	struct management_tlv *mgt;
 	msg = pmc_message(pmc, GET);
@@ -149,9 +232,50 @@ int pmc_send_get_action(struct pmc *pmc, int id)
 	}
 	mgt = (struct management_tlv *) msg->management.suffix;
 	mgt->type = TLV_MANAGEMENT;
-	mgt->length = 2;
+	datalen = pmc_tlv_datalen(pmc, id);
+	mgt->length = 2 + datalen;
 	mgt->id = id;
-	pdulen = msg->header.messageLength + sizeof(*mgt);
+	pdulen = msg->header.messageLength + sizeof(*mgt) + datalen;
+	msg->header.messageLength = pdulen;
+	msg->tlv_count = 1;
+
+	if (id == CLOCK_DESCRIPTION && !pmc->zero_length_gets) {
+		/*
+		 * Make sure the tlv_extra pointers dereferenced in
+		 * mgt_pre_send() do point to something.
+		 */
+		struct mgmt_clock_description *cd = &msg->last_tlv.cd;
+		uint8_t *buf = mgt->data;
+		cd->clockType = (UInteger16 *) buf;
+		buf += sizeof(*cd->clockType);
+		cd->physicalLayerProtocol = (struct PTPText *) buf;
+		buf += sizeof(struct PTPText) + cd->physicalLayerProtocol->length;
+		cd->physicalAddress = (struct PhysicalAddress *) buf;
+		buf += sizeof(struct PhysicalAddress) + 0;
+		cd->protocolAddress = (struct PortAddress *) buf;
+	}
+
+	pmc_send(pmc, msg, pdulen);
+	msg_put(msg);
+
+	return 0;
+}
+
+int pmc_send_set_action(struct pmc *pmc, int id, void *data, int datasize)
+{
+	int pdulen;
+	struct ptp_message *msg;
+	struct management_tlv *mgt;
+	msg = pmc_message(pmc, SET);
+	if (!msg) {
+		return -1;
+	}
+	mgt = (struct management_tlv *) msg->management.suffix;
+	mgt->type = TLV_MANAGEMENT;
+	mgt->length = 2 + datasize;
+	mgt->id = id;
+	memcpy(mgt->data, data, datasize);
+	pdulen = msg->header.messageLength + sizeof(*mgt) + datasize;
 	msg->header.messageLength = pdulen;
 	msg->tlv_count = 1;
 	pmc_send(pmc, msg, pdulen);
@@ -163,7 +287,7 @@ int pmc_send_get_action(struct pmc *pmc, int id)
 struct ptp_message *pmc_recv(struct pmc *pmc)
 {
 	struct ptp_message *msg;
-	int cnt;
+	int cnt, err;
 
 	msg = msg_allocate();
 	if (!msg) {
@@ -176,8 +300,20 @@ struct ptp_message *pmc_recv(struct pmc *pmc)
 	if (cnt <= 0) {
 		pr_err("recv message failed");
 		goto failed;
-	} else if (msg_post_recv(msg, cnt)) {
-		pr_err("bad message");
+	}
+	err = msg_post_recv(msg, cnt);
+	if (err) {
+		switch (err) {
+		case -EBADMSG:
+			pr_err("bad message");
+			break;
+		case -ETIME:
+			pr_err("received %s without timestamp",
+					msg_type_string(msg_type(msg)));
+			break;
+		case -EPROTO:
+			pr_debug("ignoring message");
+		}
 		goto failed;
 	}
 
@@ -185,4 +321,10 @@ struct ptp_message *pmc_recv(struct pmc *pmc)
 failed:
 	msg_put(msg);
 	return NULL;
+}
+
+int pmc_target(struct pmc *pmc, struct PortIdentity *pid)
+{
+	pmc->target = *pid;
+	return 0;
 }

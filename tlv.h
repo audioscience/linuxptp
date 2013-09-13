@@ -78,6 +78,7 @@ enum management_action {
 #define TRANSPARENT_CLOCK_DEFAULT_DATA_SET		0x4000
 #define PRIMARY_DOMAIN					0x4002
 #define TIME_STATUS_NP					0xC000
+#define GRANDMASTER_SETTINGS_NP				0xC001
 
 /* Port management ID values */
 #define NULL_MANAGEMENT					0x0000
@@ -182,12 +183,19 @@ struct time_status_np {
 	struct ClockIdentity gmIdentity;
 } PACKED;
 
+struct grandmaster_settings_np {
+	struct ClockQuality clockQuality;
+	Integer16 utc_offset;
+	UInteger8 time_flags;
+	Enumeration8 time_source;
+} PACKED;
+
 enum clock_type {
-	CLOCK_TYPE_ORDINARY   = 0x80,
-	CLOCK_TYPE_BOUNDARY   = 0x40,
-	CLOCK_TYPE_P2P        = 0x20,
-	CLOCK_TYPE_E2E        = 0x10,
-	CLOCK_TYPE_MANAGEMENT = 0x08,
+	CLOCK_TYPE_ORDINARY   = 0x8000,
+	CLOCK_TYPE_BOUNDARY   = 0x4000,
+	CLOCK_TYPE_P2P        = 0x2000,
+	CLOCK_TYPE_E2E        = 0x1000,
+	CLOCK_TYPE_MANAGEMENT = 0x0800,
 };
 
 #define PROFILE_ID_LEN 6

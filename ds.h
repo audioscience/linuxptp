@@ -54,6 +54,7 @@ struct default_ds {
 	int freq_est_interval; /*log seconds*/
 	int stats_interval; /*log seconds*/
 	int kernel_leap;
+	int time_source;
 	struct clock_description clock_desc;
 };
 
@@ -122,6 +123,7 @@ struct port_defaults {
 	Integer8 logMinDelayReqInterval;
 	Integer8 logMinPdelayReqInterval;
 	UInteger8 announceReceiptTimeout;
+	UInteger8 syncReceiptTimeout;
 	UInteger8 transportSpecific;
 	int path_trace_enabled;
 	int follow_up_info;

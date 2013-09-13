@@ -21,20 +21,32 @@
 #include <math.h>
 
 #include "pi.h"
+#include "print.h"
 #include "servo_private.h"
 
-#define HWTS_KP 0.7
-#define HWTS_KI 0.3
+#define HWTS_KP_SCALE 0.7
+#define HWTS_KI_SCALE 0.3
+#define SWTS_KP_SCALE 0.1
+#define SWTS_KI_SCALE 0.001
 
-#define SWTS_KP 0.1
-#define SWTS_KI 0.001
+#define MAX_KP_NORM_MAX 1.0
+#define MAX_KI_NORM_MAX 2.0
 
 #define NSEC_PER_SEC 1000000000
+#define FREQ_EST_MARGIN 0.001
 
-/* These two take their values from the configuration file. (see ptp4l.c) */
+/* These take their values from the configuration file. (see ptp4l.c) */
 double configured_pi_kp = 0.0;
 double configured_pi_ki = 0.0;
+double configured_pi_kp_scale = 0.0;
+double configured_pi_kp_exponent = -0.3;
+double configured_pi_kp_norm_max = 0.7;
+double configured_pi_ki_scale = 0.0;
+double configured_pi_ki_exponent = 0.4;
+double configured_pi_ki_norm_max = 0.3;
 double configured_pi_offset = 0.0;
+double configured_pi_f_offset = 0.0000001; /* 100 nanoseconds */
+int configured_pi_max_freq = 900000000;
 
 struct pi_servo {
 	struct servo servo;
@@ -45,7 +57,9 @@ struct pi_servo {
 	double kp;
 	double ki;
 	double max_offset;
+	double max_f_offset;
 	int count;
+	int first_update;
 };
 
 static void pi_destroy(struct servo *servo)
@@ -60,6 +74,7 @@ static double pi_sample(struct servo *servo,
 			enum servo_state *state)
 {
 	double ki_term, ppb = 0.0;
+	double freq_est_interval, localdiff;
 	struct pi_servo *s = container_of(servo, struct pi_servo, servo);
 
 	switch (s->count) {
@@ -75,7 +90,20 @@ static double pi_sample(struct servo *servo,
 
 		/* Make sure the first sample is older than the second. */
 		if (s->local[0] >= s->local[1]) {
+			*state = SERVO_UNLOCKED;
 			s->count = 0;
+			break;
+		}
+
+		/* Wait long enough before estimating the frequency offset. */
+		localdiff = (s->local[1] - s->local[0]) / 1e9;
+		localdiff += localdiff * FREQ_EST_MARGIN;
+		freq_est_interval = 0.016 / s->ki;
+		if (freq_est_interval > 1000.0) {
+			freq_est_interval = 1000.0;
+		}
+		if (localdiff < freq_est_interval) {
+			*state = SERVO_UNLOCKED;
 			break;
 		}
 
@@ -86,7 +114,14 @@ static double pi_sample(struct servo *servo,
 		else if (s->drift > s->maxppb)
 			s->drift = s->maxppb;
 
-		*state = SERVO_JUMP;
+		if (!s->first_update ||
+		    (s->max_f_offset && (s->max_f_offset < fabs(offset))) ||
+		    (s->max_offset && (s->max_offset < fabs(offset))))
+			*state = SERVO_JUMP;
+		else
+			*state = SERVO_LOCKED;
+
+		s->first_update = 0;
 		ppb = s->drift;
 		s->count = 2;
 		break;
@@ -120,6 +155,22 @@ static double pi_sample(struct servo *servo,
 	return ppb;
 }
 
+static void pi_sync_interval(struct servo *servo, double interval)
+{
+	struct pi_servo *s = container_of(servo, struct pi_servo, servo);
+
+	s->kp = configured_pi_kp_scale * pow(interval, configured_pi_kp_exponent);
+	if (s->kp > configured_pi_kp_norm_max / interval)
+		s->kp = configured_pi_kp_norm_max / interval;
+
+	s->ki = configured_pi_ki_scale * pow(interval, configured_pi_ki_exponent);
+	if (s->ki > configured_pi_ki_norm_max / interval)
+		s->ki = configured_pi_ki_norm_max / interval;
+
+	pr_debug("PI servo: sync interval %.3f kp %.3f ki %.6f",
+		 interval, s->kp, s->ki);
+}
+
 struct servo *pi_servo_create(int fadj, int max_ppb, int sw_ts)
 {
 	struct pi_servo *s;
@@ -130,24 +181,47 @@ struct servo *pi_servo_create(int fadj, int max_ppb, int sw_ts)
 
 	s->servo.destroy = pi_destroy;
 	s->servo.sample  = pi_sample;
+	s->servo.sync_interval = pi_sync_interval;
 	s->drift         = fadj;
 	s->maxppb        = max_ppb;
+	s->first_update  = 1;
+	s->kp            = 0.0;
+	s->ki            = 0.0;
 
 	if (configured_pi_kp && configured_pi_ki) {
-		s->kp = configured_pi_kp;
-		s->ki = configured_pi_ki;
-	} else if (sw_ts) {
-		s->kp = SWTS_KP;
-		s->ki = SWTS_KI;
-	} else {
-		s->kp = HWTS_KP;
-		s->ki = HWTS_KI;
+		/* Use the constants as configured by the user without
+		   adjusting for sync interval unless they make the servo
+		   unstable. */
+		configured_pi_kp_scale = configured_pi_kp;
+		configured_pi_ki_scale = configured_pi_ki;
+		configured_pi_kp_exponent = 0.0;
+		configured_pi_ki_exponent = 0.0;
+		configured_pi_kp_norm_max = MAX_KP_NORM_MAX;
+		configured_pi_ki_norm_max = MAX_KI_NORM_MAX;
+	} else if (!configured_pi_kp_scale || !configured_pi_ki_scale) {
+		if (sw_ts) {
+			configured_pi_kp_scale = SWTS_KP_SCALE;
+			configured_pi_ki_scale = SWTS_KI_SCALE;
+		} else {
+			configured_pi_kp_scale = HWTS_KP_SCALE;
+			configured_pi_ki_scale = HWTS_KI_SCALE;
+		}
 	}
 
 	if (configured_pi_offset > 0.0) {
 		s->max_offset = configured_pi_offset * NSEC_PER_SEC;
 	} else {
 		s->max_offset = 0.0;
+	}
+
+	if (configured_pi_f_offset > 0.0) {
+		s->max_f_offset = configured_pi_f_offset * NSEC_PER_SEC;
+	} else {
+		s->max_f_offset = 0.0;
+	}
+
+	if (configured_pi_max_freq && s->maxppb > configured_pi_max_freq) {
+		s->maxppb = configured_pi_max_freq;
 	}
 
 	return &s->servo;

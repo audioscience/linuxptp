@@ -25,6 +25,8 @@
 
 #define NS_PER_SEC 1000000000LL
 
+static int realtime_leap_bit;
+
 void clockadj_set_freq(clockid_t clkid, double freq)
 {
 	struct timex tx;
@@ -71,8 +73,9 @@ void clockadj_step(clockid_t clkid, int64_t step)
 		pr_err("failed to step clock: %m");
 }
 
-void clockadj_set_leap(clockid_t clkid, int leap)
+void sysclk_set_leap(int leap)
 {
+	clockid_t clkid = CLOCK_REALTIME;
 	struct timex tx;
 	const char *m = NULL;
 	memset(&tx, 0, sizeof(tx));
@@ -93,4 +96,34 @@ void clockadj_set_leap(clockid_t clkid, int leap)
 		pr_err("failed to set the clock status: %m");
 	else if (m)
 		pr_notice(m);
+	realtime_leap_bit = tx.status;
+}
+
+int sysclk_max_freq(void)
+{
+	clockid_t clkid = CLOCK_REALTIME;
+	int f = 0;
+	struct timex tx;
+	memset(&tx, 0, sizeof(tx));
+	if (clock_adjtime(clkid, &tx) < 0)
+		pr_err("failed to read out the clock maximum adjustment: %m");
+	else
+		f = tx.tolerance / 65.536;
+	if (!f)
+		f = 500000;
+	return f;
+}
+
+void sysclk_set_sync(void)
+{
+	clockid_t clkid = CLOCK_REALTIME;
+	struct timex tx;
+	memset(&tx, 0, sizeof(tx));
+	/* Clear the STA_UNSYNC flag from the status and keep the maxerror
+	   value (which is increased automatically by 500 ppm) below 16 seconds
+	   to avoid getting the STA_UNSYNC flag back. */
+	tx.modes = ADJ_STATUS | ADJ_MAXERROR;
+	tx.status = realtime_leap_bit;
+	if (clock_adjtime(clkid, &tx) < 0)
+		pr_err("failed to set clock status and maximum error: %m");
 }

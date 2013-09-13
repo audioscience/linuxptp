@@ -42,14 +42,15 @@
 
 static struct pmc *pmc;
 
-static void do_get_action(int action, int index);
-static void not_supported(int action, int index);
-static void null_management(int action, int index);
+static void do_get_action(int action, int index, char *str);
+static void do_set_action(int action, int index, char *str);
+static void not_supported(int action, int index, char *str);
+static void null_management(int action, int index, char *str);
 
 struct management_id {
 	char name[64];
 	int code;
-	void (*func)(int action, int index);
+	void (*func)(int action, int index, char *str);
 };
 
 struct management_id idtab[] = {
@@ -85,6 +86,7 @@ struct management_id idtab[] = {
 	{ "TRANSPARENT_CLOCK_DEFAULT_DATA_SET", TRANSPARENT_CLOCK_DEFAULT_DATA_SET, not_supported },
 	{ "PRIMARY_DOMAIN", PRIMARY_DOMAIN, not_supported },
 	{ "TIME_STATUS_NP", TIME_STATUS_NP, do_get_action },
+	{ "GRANDMASTER_SETTINGS_NP", GRANDMASTER_SETTINGS_NP, do_set_action },
 /* Port management ID values */
 	{ "NULL_MANAGEMENT", NULL_MANAGEMENT, null_management },
 	{ "CLOCK_DESCRIPTION", CLOCK_DESCRIPTION, do_get_action },
@@ -102,7 +104,7 @@ struct management_id idtab[] = {
 	{ "ALTERNATE_MASTER", ALTERNATE_MASTER, not_supported },
 	{ "TRANSPARENT_CLOCK_PORT_DATA_SET", TRANSPARENT_CLOCK_PORT_DATA_SET, not_supported },
 	{ "DELAY_MECHANISM", DELAY_MECHANISM, do_get_action },
-	{ "LOG_MIN_PDELAY_REQ_INTERVAL", LOG_MIN_PDELAY_REQ_INTERVAL, not_supported },
+	{ "LOG_MIN_PDELAY_REQ_INTERVAL", LOG_MIN_PDELAY_REQ_INTERVAL, do_get_action },
 };
 
 static char *action_string[] = {
@@ -115,7 +117,8 @@ static char *action_string[] = {
 
 #define IFMT "\n\t\t"
 
-static char *text2str(struct PTPText *text) {
+static char *text2str(struct PTPText *text)
+{
 	static struct static_ptp_text s;
 	s.max_symbols = -1;
 	static_ptp_text_copy(&s, text);
@@ -125,7 +128,8 @@ static char *text2str(struct PTPText *text) {
 #define MAX_PRINT_BYTES 16
 #define BIN_BUF_SIZE (MAX_PRINT_BYTES * 3 + 1)
 
-static char *bin2str_impl(Octet *data, int len, char *buf, int buf_len) {
+static char *bin2str_impl(Octet *data, int len, char *buf, int buf_len)
+{
 	int i, offset = 0;
 	if (len > MAX_PRINT_BYTES)
 		len = MAX_PRINT_BYTES;
@@ -143,18 +147,21 @@ static char *bin2str_impl(Octet *data, int len, char *buf, int buf_len) {
 	return buf;
 }
 
-static char *bin2str(Octet *data, int len) {
+static char *bin2str(Octet *data, int len)
+{
 	static char buf[BIN_BUF_SIZE];
 	return bin2str_impl(data, len, buf, sizeof(buf));
 }
 
-static uint16_t align16(uint16_t *p) {
+static uint16_t align16(uint16_t *p)
+{
 	uint16_t v;
 	memcpy(&v, p, sizeof(v));
 	return v;
 }
 
-static char *portaddr2str(struct PortAddress *addr) {
+static char *portaddr2str(struct PortAddress *addr)
+{
 	static char buf[BIN_BUF_SIZE];
 	switch(align16(&addr->networkProtocol)) {
 	case TRANS_UDP_IPV4:
@@ -183,6 +190,7 @@ static void pmc_show(struct ptp_message *msg, FILE *fp)
 	struct parentDS *pds;
 	struct timePropertiesDS *tp;
 	struct time_status_np *tsn;
+	struct grandmaster_settings_np *gsn;
 	struct mgmt_clock_description *cd;
 	struct portDS *p;
 	if (msg_type(msg) != MANAGEMENT) {
@@ -379,6 +387,32 @@ static void pmc_show(struct ptp_message *msg, FILE *fp)
 			tsn->gmPresent ? "true" : "false",
 			cid2str(&tsn->gmIdentity));
 		break;
+	case GRANDMASTER_SETTINGS_NP:
+		gsn = (struct grandmaster_settings_np *) mgt->data;
+		fprintf(fp, "GRANDMASTER_SETTINGS_NP "
+			IFMT "clockClass              %hhu"
+			IFMT "clockAccuracy           0x%02hhx"
+			IFMT "offsetScaledLogVariance 0x%04hx"
+			IFMT "currentUtcOffset        %hd"
+			IFMT "leap61                  %d"
+			IFMT "leap59                  %d"
+			IFMT "currentUtcOffsetValid   %d"
+			IFMT "ptpTimescale            %d"
+			IFMT "timeTraceable           %d"
+			IFMT "frequencyTraceable      %d"
+			IFMT "timeSource              0x%02hhx",
+			gsn->clockQuality.clockClass,
+			gsn->clockQuality.clockAccuracy,
+			gsn->clockQuality.offsetScaledLogVariance,
+			gsn->utc_offset,
+			gsn->time_flags & LEAP_61 ? 1 : 0,
+			gsn->time_flags & LEAP_59 ? 1 : 0,
+			gsn->time_flags & UTC_OFF_VALID ? 1 : 0,
+			gsn->time_flags & PTP_TIMESCALE ? 1 : 0,
+			gsn->time_flags & TIME_TRACEABLE ? 1 : 0,
+			gsn->time_flags & FREQ_TRACEABLE ? 1 : 0,
+			gsn->time_source);
+		break;
 	case PORT_DATA_SET:
 		p = (struct portDS *) mgt->data;
 		if (p->portState > PS_SLAVE) {
@@ -437,7 +471,7 @@ out:
 	fflush(fp);
 }
 
-static void do_get_action(int action, int index)
+static void do_get_action(int action, int index, char *str)
 {
 	if (action == GET)
 		pmc_send_get_action(pmc, idtab[index].code);
@@ -445,12 +479,81 @@ static void do_get_action(int action, int index)
 		fprintf(stderr, "%s only allows GET\n", idtab[index].name);
 }
 
-static void not_supported(int action, int index)
+static void do_set_action(int action, int index, char *str)
+{
+	struct grandmaster_settings_np gsn;
+	int cnt, code = idtab[index].code;
+	int leap_61, leap_59, utc_off_valid;
+	int ptp_timescale, time_traceable, freq_traceable;
+
+	switch (action) {
+	case GET:
+		pmc_send_get_action(pmc, code);
+		return;
+	case SET:
+		break;
+	case RESPONSE:
+	case COMMAND:
+	case ACKNOWLEDGE:
+	default:
+		fprintf(stderr, "%s only allows GET or SET\n",
+			idtab[index].name);
+		return;
+	}
+	switch (code) {
+	case GRANDMASTER_SETTINGS_NP:
+		cnt = sscanf(str, " %*s %*s "
+			     "clockClass              %hhu "
+			     "clockAccuracy           %hhx "
+			     "offsetScaledLogVariance %hx "
+			     "currentUtcOffset        %hd "
+			     "leap61                  %d "
+			     "leap59                  %d "
+			     "currentUtcOffsetValid   %d "
+			     "ptpTimescale            %d "
+			     "timeTraceable           %d "
+			     "frequencyTraceable      %d "
+			     "timeSource              %hhx ",
+			     &gsn.clockQuality.clockClass,
+			     &gsn.clockQuality.clockAccuracy,
+			     &gsn.clockQuality.offsetScaledLogVariance,
+			     &gsn.utc_offset,
+			     &leap_61,
+			     &leap_59,
+			     &utc_off_valid,
+			     &ptp_timescale,
+			     &time_traceable,
+			     &freq_traceable,
+			     &gsn.time_source);
+		if (cnt != 11) {
+			fprintf(stderr, "%s SET needs 11 values\n",
+				idtab[index].name);
+			break;
+		}
+		gsn.time_flags = 0;
+		if (leap_61)
+			gsn.time_flags |= LEAP_61;
+		if (leap_59)
+			gsn.time_flags |= LEAP_59;
+		if (utc_off_valid)
+			gsn.time_flags |= UTC_OFF_VALID;
+		if (ptp_timescale)
+			gsn.time_flags |= PTP_TIMESCALE;
+		if (time_traceable)
+			gsn.time_flags |= TIME_TRACEABLE;
+		if (freq_traceable)
+			gsn.time_flags |= FREQ_TRACEABLE;
+		pmc_send_set_action(pmc, code, &gsn, sizeof(gsn));
+		break;
+	}
+}
+
+static void not_supported(int action, int index, char *str)
 {
 	fprintf(stdout, "sorry, %s not supported yet\n", idtab[index].name);
 }
 
-static void null_management(int action, int index)
+static void null_management(int action, int index, char *str)
 {
 	if (action == GET)
 		pmc_send_get_action(pmc, idtab[index].code);
@@ -493,6 +596,19 @@ static int parse_id(char *s)
 	return index;
 }
 
+static int parse_target(const char *str)
+{
+	struct PortIdentity pid;
+
+	if (str[0] == '*') {
+		memset(&pid, 0xff, sizeof(pid));
+	} else if (str2pid(str, &pid)) {
+		return -1;
+	}
+
+	return pmc_target(pmc, &pid);
+}
+
 static void print_help(FILE *fp)
 {
 	int i;
@@ -504,6 +620,9 @@ static void print_help(FILE *fp)
 	fprintf(fp, "\n");
 	fprintf(fp, "\tThe [action] can be GET, SET, CMD, or COMMAND\n");
 	fprintf(fp, "\tCommands are case insensitive and may be abbreviated.\n");
+	fprintf(fp, "\n");
+	fprintf(fp, "\tTARGET [portIdentity]\n");
+	fprintf(fp, "\tTARGET *\n");
 	fprintf(fp, "\n");
 }
 
@@ -520,6 +639,9 @@ static int do_command(char *str)
 	if (2 != sscanf(str, " %10s %64s", action_str, id_str))
 		return -1;
 
+	if (0 == strncasecmp(action_str, "TARGET", strlen(action_str)))
+		return parse_target(id_str);
+
 	action = parse_action(action_str);
 	id = parse_id(id_str);
 
@@ -534,7 +656,7 @@ static int do_command(char *str)
 	fprintf(stdout, "sending: %s %s\n",
 		action_string[action], idtab[id].name);
 
-	idtab[id].func(action, id);
+	idtab[id].func(action, id, str);
 
 	return 0;
 }
@@ -556,6 +678,7 @@ static void usage(char *progname)
 		"           for network and '/var/run/pmc' for UDS.\n"
 		" -t [hex]  transport specific field, default 0x0\n"
 		" -v        prints the software version and exits\n"
+		" -z        send zero length TLV values with the GET actions\n"
 		"\n",
 		progname);
 }
@@ -563,7 +686,7 @@ static void usage(char *progname)
 int main(int argc, char *argv[])
 {
 	char *iface_name = NULL, *progname;
-	int c, cnt, length, tmo = -1, batch_mode = 0;
+	int c, cnt, length, tmo = -1, batch_mode = 0, zero_datalen = 0;
 	char line[1024], *command = NULL;
 	enum transport_type transport_type = TRANS_UDP_IPV4;
 	UInteger8 boundary_hops = 1, domain_number = 0, transport_specific = 0;
@@ -574,7 +697,7 @@ int main(int argc, char *argv[])
 	/* Process the command line arguments. */
 	progname = strrchr(argv[0], '/');
 	progname = progname ? 1+progname : argv[0];
-	while (EOF != (c = getopt(argc, argv, "246u""b:d:hi:t:v"))) {
+	while (EOF != (c = getopt(argc, argv, "246u""b:d:hi:t:vz"))) {
 		switch (c) {
 		case '2':
 			transport_type = TRANS_IEEE_802_3;
@@ -604,6 +727,9 @@ int main(int argc, char *argv[])
 		case 'v':
 			version_show(stdout);
 			return 0;
+		case 'z':
+			zero_datalen = 1;
+			break;
 		case 'h':
 			usage(progname);
 			return 0;
@@ -627,7 +753,8 @@ int main(int argc, char *argv[])
 	print_set_syslog(1);
 	print_set_verbose(1);
 
-	pmc = pmc_create(transport_type, iface_name, boundary_hops, domain_number, transport_specific);
+	pmc = pmc_create(transport_type, iface_name, boundary_hops,
+			 domain_number, transport_specific, zero_datalen);
 	if (!pmc) {
 		fprintf(stderr, "failed to create pmc\n");
 		return -1;
@@ -703,5 +830,6 @@ int main(int argc, char *argv[])
 	}
 
 	pmc_destroy(pmc);
+	msg_cleanup();
 	return 0;
 }

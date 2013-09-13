@@ -4,42 +4,34 @@ phc2sys \- synchronize two clocks
 
 .SH SYNOPSIS
 .B phc2sys
-{
-.BI \-d " pps-device"
 [
-.BI \-s " phc-device"
-|
-.BI \-i " interface"
-] |
-.BI \-s " phc-device"
-|
-.BI \-i " interface"
-} [
-.BI \-c " phc-device"
+.B \-wmqvx
+] [
+.BI \-d " pps-device"
+] [
+.BI \-s " device"
+] [
+.BI \-c " device"
+] [
+.BI \-O " offset"
 ] [
 .BI \-P " kp"
 ] [
 .BI \-I " ki"
 ] [
+.BI \-S " step"
+] [
+.BI \-F " step"
+] [
 .BI \-R " update-rate"
 ] [
 .BI \-N " clock-readings"
 ] [
-.BI \-O " offset"
-] [
 .BI \-u " summary-updates"
 ] [
-.B \-w
-] [
-.B \-x
+.BI \-n " domain-number"
 ] [
 .BI \-l " print-level"
-] [
-.B \-m
-] [
-.B \-q
-] [
-.B \-v
 ]
 
 .SH DESCRIPTION
@@ -52,9 +44,9 @@ program.
 
 Two synchronization modes are supported, one uses a pulse per second (PPS)
 signal provided by the source clock and the other mode reads time from the
-source clock directly. The PPS mode is usually preferred, because reading the
-PHC is slow and introduces an unknown error in the readings, but not all PHCs
-provide the PPS signal.
+source clock directly. Some clocks can be used in both modes, the mode which
+will synchronize the slave clock with better accuracy depends on hardware and
+driver implementation.
 
 .SH OPTIONS
 .TP
@@ -69,21 +61,26 @@ is started or the
 option should be used too. This option can be used only with the system clock as
 the slave clock.
 .TP
-.BI \-s " phc-device"
-Specify the master clock by device (e.g. /dev/ptp0) or name (e.g. CLOCK_REALTIME
-for the system clock). When this option is used together with the
+.BI \-s " device"
+Specify the master clock by device (e.g. /dev/ptp0) or interface (e.g. eth0) or
+by name (e.g. CLOCK_REALTIME for the system clock). When this option is used
+together with the
 .B \-d
 option, the master clock is used only to correct the offset by whole number of
 seconds, which cannot be fixed with PPS alone.
 .TP
 .BI \-i " interface"
-Similar to the
+Performs the exact same function as
 .B \-s
-option, but specified by the interface which provides the master clock.
+for compatibility reasons. Previously enabled specifying master clock by network
+interface. However, this can now be done using
+.B \-s
+and this option is no longer necessary. As such it has been deprecated, and
+should no longer be used.
 .TP
-.BI \-c " phc-device"
-Specify the slave clock by device (e.g. /dev/ptp1) or name. The default is
-CLOCK_REALTIME (the system clock).
+.BI \-c " device"
+Specify the slave clock by device (e.g. /dev/ptp1) or interface (e.g. eth1) or
+by  name. The default is CLOCK_REALTIME (the system clock).
 .TP
 .BI \-P " kp"
 Specify the proportional constant of the PI controller. The default is 0.7.
@@ -94,8 +91,16 @@ Specify the integral constant of the PI controller. The default is 0.3.
 .BI \-S " step"
 Specify the step threshold of the PI controller. It is the maximum offset that
 the controller corrects by changing the clock frequency instead of stepping the
-clock. The clock is always stepped on start. The value of 0.0 disables stepping
-after the start. The default is 0.0.
+clock. The clock is stepped on start regardless of the option if the offset is
+larger than 100 nanoseconds (unless the
+.BI \-F
+option is used). The value of 0.0 disables stepping after the start. The default
+is 0.0.
+.TP
+.BI \-F " step"
+Specify the step threshold applied only on the first update. It is the maximum
+offset that is corrected by adjusting clock. The value of 0.0 disables stepping
+on start. The default is 0.0000001 (100 nanoseconds).
 .TP
 .BI \-R " update-rate"
 Specify the slave clock update rate when running in the direct synchronization
@@ -108,10 +113,10 @@ minimize the error caused by random delays in scheduling and bus utilization.
 The default is 5.
 .TP
 .BI \-O " offset"
-Specify the offset between the slave and master times in seconds. The default
-is set automatically with the
-.B \-w
-option, 0 otherwise.
+Specify the offset between the slave and master times in seconds.  See
+.SM
+.B TIME SCALE USAGE
+below.
 .TP
 .BI \-u " summary-updates"
 Specify the number of clock updates included in summary statistics. The
@@ -128,6 +133,9 @@ Wait until ptp4l is in a synchronized state. If the
 option is not used, also keep the offset between the slave and master
 times updated according to the currentUtcOffset value obtained from ptp4l and
 the direction of the clock synchronization.
+.TP
+.BI \-n " domain-number"
+Specify the domain number used by ptp4l. The default is 0.
 .TP
 .B \-x
 When a leap second is announced, don't apply it in the kernel by stepping the
@@ -151,6 +159,73 @@ Display a help message.
 .TP
 .B \-v
 Prints the software version and exits.
+
+.SH TIME SCALE USAGE
+
+.B Ptp4l
+uses either PTP time scale or UTC (Coordinated Universal Time) time
+scale.  PTP time scale is continuous and shifted against UTC by a few tens of
+seconds as PTP time scale does not apply leap seconds.
+
+In hardware time stamping mode,
+.B ptp4l
+announces use of PTP time scale and PHC
+is used for the stamps.  That means PHC must follow PTP time scale while system
+clock follows UTC.  Time offset between these two is maintained by
+.BR phc2sys .
+
+.B Phc2sys
+acquires the offset value either by reading it from ptp4l when
+.B \-w
+is in effect or from command line when
+.B \-O
+is supplied.  Failure to maintain the correct offset can result in local system
+clock being off some seconds to domain master system clock when in slave mode,
+or incorect PTP time announced to the network in case the host is the domain
+master.
+
+.SH EXAMPLES
+
+The host is a domain master, PTP clock is synchronized to system clock and the
+time offset is obtained from
+.BR ptp4l .
+.B Phc2sys
+waits for
+.B ptp4l
+to get at least one port in master or slave mode before starting the
+synchronization.
+
+.RS
+\f(CWphc2sys \-c /dev/ptp0 \-s CLOCK_REALTIME \-w\fP
+.RE
+
+Same as above, time offset is provided on command line and
+.B phc2sys
+does not wait for
+.BR ptp4l .
+
+.RS
+\f(CWphc2sys \-c /dev/ptp0 \-s CLOCK_REALTIME \-O 35\fP
+.RE
+
+The host is in slave mode, system clock is synchronized from PTP clock,
+.B phc2sys
+waits for
+.B ptp4l
+and the offset is set automatically.
+
+.RS
+\f(CWphc2sys \-s /dev/ptp0 \-w\fP
+.RE
+
+Same as above, PTP clock id is read from the network interface, the offset is
+provided on command line
+.B phc2sys
+does not wait.
+
+.RS
+\f(CWphc2sys \-s eth0 \-O \-35\fP
+.RE
 
 .SH SEE ALSO
 .BR ptp4l (8)
