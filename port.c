@@ -1933,6 +1933,7 @@ static void port_p2p_transition(struct port *p, enum port_state next)
 		port_disable(p);
 		break;
 	case PS_LISTENING:
+		set_tmo_log(p->fda.fd[FD_MANNO_TIMER], 1, -10); /*~1ms*/
 		port_set_announce_tmo(p);
 		break;
 	case PS_PRE_MASTER:
@@ -1989,6 +1990,7 @@ int port_dispatch(struct port *p, enum fsm_event event, int mdiff)
 		port_show_transition(p, next, event);
 		p->state = next;
 		if (next == PS_LISTENING && p->delayMechanism == DM_P2P) {
+			set_tmo_log(p->fda.fd[FD_MANNO_TIMER], 1, -10); /*~1ms*/
 			port_set_delay_tmo(p);
 		}
 		return 1;
