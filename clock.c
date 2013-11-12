@@ -1147,6 +1147,7 @@ static void handle_state_decision_event(struct clock *c)
 		best_id = best->dataset.identity;
 	} else {
 		best_id = c->dds.clockIdentity;
+		clock_update_grandmaster(c);
 	}
 
 	pr_notice("selected best master clock %s",
