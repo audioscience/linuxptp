@@ -159,6 +159,7 @@ static enum parser_result parse_port_setting(const char *option,
 					    int p)
 {
 	enum parser_result r;
+	int val;
 
 	r = parse_pod_setting(option, value, &cfg->iface[p].pod);
 	if (r != NOT_PARSED)
@@ -183,6 +184,21 @@ static enum parser_result parse_port_setting(const char *option,
 			cfg->iface[p].dm = DM_P2P;
 		else
 			return BAD_VALUE;
+
+	} else if (!strcmp(option, "delay_filter")) {
+		if (!strcasecmp("moving_average", value))
+			cfg->iface[p].delay_filter = FILTER_MOVING_AVERAGE;
+		else if (!strcasecmp("moving_median", value))
+			cfg->iface[p].delay_filter = FILTER_MOVING_MEDIAN;
+		else
+			return BAD_VALUE;
+
+	} else if (!strcmp(option, "delay_filter_length")) {
+		r = get_ranged_int(value, &val, 1, INT_MAX);
+		if (r != PARSED_OK)
+			return r;
+		cfg->iface[p].delay_filter_length = val;
+
 	} else
 		return NOT_PARSED;
 
@@ -238,6 +254,12 @@ static enum parser_result parse_global_setting(const char *option,
 			else
 				dds->flags &= ~DDS_SLAVE_ONLY;
 		}
+
+	} else if (!strcmp(option, "gmCapable")) {
+		r = get_ranged_int(value, &val, 0, 1);
+		if (r != PARSED_OK)
+			return r;
+		cfg->dds.grand_master_capable = val;
 
 	} else if (!strcmp(option, "priority1")) {
 		r = get_ranged_uint(value, &uval, 0, UINT8_MAX);
@@ -373,6 +395,12 @@ static enum parser_result parse_global_setting(const char *option,
 			return r;
 		*cfg->pi_max_frequency = val;
 
+	} else if (!strcmp(option, "sanity_freq_limit")) {
+		r = get_ranged_int(value, &val, 0, INT_MAX);
+		if (r != PARSED_OK)
+			return r;
+		cfg->dds.sanity_freq_limit = val;
+
 	} else if (!strcmp(option, "ptp_dst_mac")) {
 		if (MAC_LEN != sscanf(value, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
 				      &mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]))
@@ -392,6 +420,11 @@ static enum parser_result parse_global_setting(const char *option,
 		if (r != PARSED_OK)
 			return r;
 		*cfg->udp6_scope = uval;
+
+	} else if (!strcmp(option, "uds_address")) {
+		if (strlen(value) > MAX_IFNAME_SIZE)
+			return OUT_OF_RANGE;
+		strncpy(cfg->uds_address, value, MAX_IFNAME_SIZE);
 
 	} else if (!strcmp(option, "logging_level")) {
 		r = get_ranged_int(value, &val,
@@ -498,6 +531,20 @@ static enum parser_result parse_global_setting(const char *option,
 		if (r != PARSED_OK)
 			return r;
 		cfg->dds.time_source = val;
+
+	} else if (!strcmp(option, "delay_filter")) {
+		if (!strcasecmp("moving_average", value))
+			cfg->dds.delay_filter = FILTER_MOVING_AVERAGE;
+		else if (!strcasecmp("moving_median", value))
+			cfg->dds.delay_filter = FILTER_MOVING_MEDIAN;
+		else
+			return BAD_VALUE;
+
+	} else if (!strcmp(option, "delay_filter_length")) {
+		r = get_ranged_int(value, &val, 1, INT_MAX);
+		if (r != PARSED_OK)
+			return r;
+		cfg->dds.delay_filter_length = val;
 
 	} else
 		return NOT_PARSED;
@@ -655,6 +702,9 @@ int config_create_interface(char *name, struct config *cfg)
 	memcpy(&iface->pod, &cfg->pod, sizeof(cfg->pod));
 
 	sk_get_ts_info(name, &iface->ts_info);
+
+	iface->delay_filter = cfg->dds.delay_filter;
+	iface->delay_filter_length = cfg->dds.delay_filter_length;
 
 	cfg->nports++;
 

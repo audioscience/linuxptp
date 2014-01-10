@@ -1,6 +1,6 @@
 /**
- * @file servo.c
- * @note Copyright (C) 2011 Richard Cochran <richardcochran@gmail.com>
+ * @file filter.c
+ * @note Copyright (C) 2013 Miroslav Lichvar <mlichvar@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,38 +16,34 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#include <string.h>
 
-#include "pi.h"
-#include "servo_private.h"
+#include "filter_private.h"
+#include "mave.h"
+#include "mmedian.h"
 
-struct servo *servo_create(enum servo_type type, int fadj, int max_ppb, int sw_ts)
+struct filter *filter_create(enum filter_type type, int length)
 {
-	if (type == CLOCK_SERVO_PI) {
-		return pi_servo_create(fadj, max_ppb, sw_ts);
+	switch (type) {
+	case FILTER_MOVING_AVERAGE:
+		return mave_create(length);
+	case FILTER_MOVING_MEDIAN:
+		return mmedian_create(length);
+	default:
+		return NULL;
 	}
-	return NULL;
 }
 
-void servo_destroy(struct servo *servo)
+void filter_destroy(struct filter *filter)
 {
-	servo->destroy(servo);
+	filter->destroy(filter);
 }
 
-double servo_sample(struct servo *servo,
-		    int64_t offset,
-		    uint64_t local_ts,
-		    enum servo_state *state)
+tmv_t filter_sample(struct filter *filter, tmv_t sample)
 {
-	return servo->sample(servo, offset, local_ts, state);
+	return filter->sample(filter, sample);
 }
 
-void servo_sync_interval(struct servo *servo, double interval)
+void filter_reset(struct filter *filter)
 {
-	servo->sync_interval(servo, interval);
-}
-
-void servo_reset(struct servo *servo)
-{
-	servo->reset(servo);
+	filter->reset(filter);
 }

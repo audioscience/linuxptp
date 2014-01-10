@@ -25,8 +25,9 @@
 #include "bmc.h"
 #include "clock.h"
 #include "clockadj.h"
+#include "clockcheck.h"
 #include "foreign.h"
-#include "mave.h"
+#include "filter.h"
 #include "missing.h"
 #include "msg.h"
 #include "phc.h"
@@ -40,7 +41,6 @@
 
 #define CLK_N_PORTS (MAX_PORTS + 1) /* plus one for the UDS interface */
 #define N_CLOCK_PFD (N_POLLFD + 1) /* one extra per port, for the fault timer */
-#define MAVE_LENGTH 10
 #define POW2_41 ((double)(1ULL << 41))
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
@@ -76,6 +76,7 @@ struct clock {
 	int nports; /* does not include the UDS port */
 	int free_running;
 	int freq_est_interval;
+	int grand_master_capable; /* for 802.1AS only */
 	int utc_timescale;
 	int leap_set;
 	int kernel_leap;
@@ -85,7 +86,7 @@ struct clock {
 	enum servo_state servo_state;
 	tmv_t master_offset;
 	tmv_t path_delay;
-	struct mave *avg_delay;
+	struct filter *delay_filter;
 	struct freq_estimator fest;
 	struct time_status_np status;
 	double nrr;
@@ -96,6 +97,7 @@ struct clock {
 	struct clock_description desc;
 	struct clock_stats stats;
 	int stats_interval;
+	struct clockcheck *sanity_check;
 };
 
 struct clock the_clock;
@@ -119,10 +121,12 @@ void clock_destroy(struct clock *c)
 		phc_close(c->clkid);
 	}
 	servo_destroy(c->servo);
-	mave_destroy(c->avg_delay);
+	filter_destroy(c->delay_filter);
 	stats_destroy(c->stats.offset);
 	stats_destroy(c->stats.freq);
 	stats_destroy(c->stats.delay);
+	if (c->sanity_check)
+		clockcheck_destroy(c->sanity_check);
 	memset(c, 0, sizeof(*c));
 	msg_cleanup();
 }
@@ -553,7 +557,7 @@ static int forwarding(struct clock *c, struct port *p)
 	default:
 		break;
 	}
-	if (p == c->port[c->nports]) { /*uds*/
+	if (p == c->port[c->nports] && ps != PS_FAULTY) { /*uds*/
 		return 1;
 	}
 	return 0;
@@ -574,18 +578,22 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 	struct clock *c = &the_clock;
 	char phc[32];
 	struct interface udsif;
+	struct timespec ts;
 
 	memset(&udsif, 0, sizeof(udsif));
-	snprintf(udsif.name, sizeof(udsif.name), UDS_PATH);
+	snprintf(udsif.name, sizeof(udsif.name), "%s", uds_path);
 	udsif.transport = TRANS_UDS;
+	udsif.delay_filter_length = 1;
 
-	srandom(time(NULL));
+	clock_gettime(CLOCK_REALTIME, &ts);
+	srandom(ts.tv_sec ^ ts.tv_nsec);
 
 	if (c->nports)
 		clock_destroy(c);
 
 	c->free_running = dds->free_running;
 	c->freq_est_interval = dds->freq_est_interval;
+	c->grand_master_capable = dds->grand_master_capable;
 	c->kernel_leap = dds->kernel_leap;
 	c->utc_offset = CURRENT_UTC_OFFSET;
 	c->time_source = dds->time_source;
@@ -608,9 +616,11 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 			pr_err("clock is not adjustable");
 			return NULL;
 		}
+		clockadj_init(c->clkid);
 	} else {
 		c->clkid = CLOCK_REALTIME;
 		c->utc_timescale = 1;
+		clockadj_init(c->clkid);
 		max_adj = sysclk_max_freq();
 		sysclk_set_leap(0);
 	}
@@ -630,9 +640,10 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 		return NULL;
 	}
 	c->servo_state = SERVO_UNLOCKED;
-	c->avg_delay = mave_create(MAVE_LENGTH);
-	if (!c->avg_delay) {
-		pr_err("Failed to create moving average");
+	c->delay_filter = filter_create(dds->delay_filter,
+					dds->delay_filter_length);
+	if (!c->delay_filter) {
+		pr_err("Failed to create delay filter");
 		return NULL;
 	}
 	c->stats_interval = dds->stats_interval;
@@ -642,6 +653,13 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 	if (!c->stats.offset || !c->stats.freq || !c->stats.delay) {
 		pr_err("failed to create stats");
 		return NULL;
+	}
+	if (dds->sanity_freq_limit) {
+		c->sanity_check = clockcheck_create(dds->sanity_freq_limit);
+		if (!c->sanity_check) {
+			pr_err("Failed to create clock sanity check");
+			return NULL;
+		}
 	}
 
 	c->dds = dds->dds;
@@ -734,6 +752,11 @@ void clock_follow_up_info(struct clock *c, struct follow_up_info_tlv *f)
 	c->status.gmTimeBaseIndicator = f->gmTimeBaseIndicator;
 	memcpy(&c->status.lastGmPhaseChange, &f->lastGmPhaseChange,
 	       sizeof(c->status.lastGmPhaseChange));
+}
+
+int clock_gm_capable(struct clock *c)
+{
+	return c->grand_master_capable;
 }
 
 struct ClockIdentity clock_identity(struct clock *c)
@@ -983,7 +1006,7 @@ void clock_path_delay(struct clock *c, struct timespec req, struct timestamp rx,
 		pr_warning("c3 %10lld", c3);
 	}
 
-	c->path_delay = mave_accumulate(c->avg_delay, pd);
+	c->path_delay = filter_sample(c->delay_filter, pd);
 
 	c->cur.meanPathDelay = tmv_to_TimeInterval(c->path_delay);
 
@@ -1084,11 +1107,18 @@ enum servo_state clock_synchronize(struct clock *c,
 		clockadj_step(c->clkid, -tmv_to_nanoseconds(c->master_offset));
 		c->t1 = tmv_zero();
 		c->t2 = tmv_zero();
+		if (c->sanity_check) {
+			clockcheck_set_freq(c->sanity_check, -adj);
+			clockcheck_step(c->sanity_check,
+					-tmv_to_nanoseconds(c->master_offset));
+		}
 		break;
 	case SERVO_LOCKED:
 		clockadj_set_freq(c->clkid, -adj);
 		if (c->clkid == CLOCK_REALTIME)
 			sysclk_set_sync();
+		if (c->sanity_check)
+			clockcheck_set_freq(c->sanity_check, -adj);
 		break;
 	}
 	return state;
@@ -1154,7 +1184,9 @@ static void handle_state_decision_event(struct clock *c)
 
 	if (!cid_eq(&best_id, &c->best_id)) {
 		clock_freq_est_reset(c);
-		mave_reset(c->avg_delay);
+		filter_reset(c->delay_filter);
+		c->t1 = tmv_zero();
+		c->t2 = tmv_zero();
 		c->path_delay = 0;
 		fresh_best = 1;
 	}
@@ -1201,4 +1233,13 @@ struct clock_description *clock_description(struct clock *c)
 int clock_num_ports(struct clock *c)
 {
 	return c->nports;
+}
+
+void clock_check_ts(struct clock *c, struct timespec ts)
+{
+	if (c->sanity_check &&
+	    clockcheck_sample(c->sanity_check,
+			      ts.tv_sec * NS_PER_SEC + ts.tv_nsec)) {
+		servo_reset(c->servo);
+	}
 }

@@ -25,19 +25,17 @@
 
 #include "bmc.h"
 #include "clock.h"
-#include "mave.h"
+#include "filter.h"
 #include "missing.h"
 #include "msg.h"
 #include "port.h"
 #include "print.h"
 #include "sk.h"
 #include "tlv.h"
-#include "tmtab.h"
 #include "tmv.h"
 #include "util.h"
 
 #define ALLOWED_LOST_RESPONSES 3
-#define PORT_MAVE_LENGTH 10
 
 enum syfu_state {
 	SF_EMPTY,
@@ -58,6 +56,7 @@ struct nrate_estimator {
 	tmv_t ingress1;
 	unsigned int max_count;
 	unsigned int count;
+	int ratio_valid;
 };
 
 struct port {
@@ -80,9 +79,8 @@ struct port {
 		UInteger16 delayreq;
 		UInteger16 sync;
 	} seqnum;
-	struct tmtab tmtab;
 	tmv_t peer_delay;
-	struct mave *avg_delay;
+	struct filter *delay_filter;
 	int log_sync_interval;
 	struct nrate_estimator nrate;
 	unsigned int pdr_missing;
@@ -228,6 +226,29 @@ int set_tmo_lin(int fd, int seconds)
 	};
 
 	tmo.it_value.tv_sec = seconds;
+	return timerfd_settime(fd, 0, &tmo, NULL);
+}
+
+int set_tmo_random(int fd, int min, int span, int log_seconds)
+{
+	uint64_t value_ns, min_ns, span_ns;
+	struct itimerspec tmo = {
+		{0, 0}, {0, 0}
+	};
+
+	if (log_seconds >= 0) {
+		min_ns = min * NS_PER_SEC << log_seconds;
+		span_ns = span * NS_PER_SEC << log_seconds;
+	} else {
+		min_ns = min * NS_PER_SEC >> -log_seconds;
+		span_ns = span * NS_PER_SEC >> -log_seconds;
+	}
+
+	value_ns = min_ns + (span_ns * (random() % (1 << 15) + 1) >> 15);
+
+	tmo.it_value.tv_sec = value_ns / NS_PER_SEC;
+	tmo.it_value.tv_nsec = value_ns % NS_PER_SEC;
+
 	return timerfd_settime(fd, 0, &tmo, NULL);
 }
 
@@ -475,6 +496,13 @@ static int port_capable(struct port *p)
 		goto not_capable;
 	}
 
+	if (!p->nrate.ratio_valid) {
+		if (p->asCapable)
+			pr_debug("port %hu: invalid nrate, "
+				"resetting asCapable", portnum(p));
+		goto not_capable;
+	}
+
 capable:
 	if (!p->asCapable)
 		pr_debug("port %hu: setting asCapable", portnum(p));
@@ -520,6 +548,31 @@ static int port_ignore(struct port *p, struct ptp_message *m)
 	c2 = m->header.sourcePortIdentity.clockIdentity;
 
 	if (0 == memcmp(&c1, &c2, sizeof(c1))) {
+		return 1;
+	}
+	return 0;
+}
+
+/*
+ * Test whether a 802.1AS port may transmit a sync message.
+ */
+static int port_sync_incapable(struct port *p)
+{
+	struct ClockIdentity cid;
+	struct PortIdentity pid;
+
+	if (!port_is_ieee8021as(p)) {
+		return 0;
+	}
+	if (clock_gm_capable(p->clock)) {
+		return 0;
+	}
+	cid = clock_identity(p->clock);
+	pid = clock_parent_identity(p->clock);
+	if (!memcmp(&cid, &pid.clockIdentity, sizeof(cid))) {
+		/*
+		 * We are the GM, but without gmCapable set.
+		 */
 		return 1;
 	}
 	return 0;
@@ -734,6 +787,12 @@ static void port_nrate_calculate(struct port *p, tmv_t t3, tmv_t t4, tmv_t c)
 	tmv_t origin2;
 	struct nrate_estimator *n = &p->nrate;
 
+	/*
+	 * We experienced a successful exchanges of peer delay request
+	 * and response, reset pdr_missing for this port.
+	 */
+	p->pdr_missing = 0;
+
 	if (!n->ingress1) {
 		n->ingress1 = t4;
 		n->origin1 = tmv_add(t3, c);
@@ -754,11 +813,7 @@ static void port_nrate_calculate(struct port *p, tmv_t t3, tmv_t t4, tmv_t c)
 	n->ingress1 = t4;
 	n->origin1 = origin2;
 	n->count = 0;
-	/*
-	 * We experienced a successful series of exchanges of peer
-	 * delay request and response, and so the port is now capable.
-	 */
-	p->pdr_missing = 0;
+	n->ratio_valid = 1;
 }
 
 static void port_nrate_initialize(struct port *p)
@@ -782,27 +837,24 @@ static void port_nrate_initialize(struct port *p)
 	p->nrate.ingress1 = tmv_zero();
 	p->nrate.max_count = (1 << shift);
 	p->nrate.count = 0;
+	p->nrate.ratio_valid = 0;
 }
 
 static int port_set_announce_tmo(struct port *p)
 {
-	return set_tmo_log(p->fda.fd[FD_ANNOUNCE_TIMER],
-		       p->announceReceiptTimeout, p->logAnnounceInterval);
+	return set_tmo_random(p->fda.fd[FD_ANNOUNCE_TIMER],
+		       p->announceReceiptTimeout, 1, p->logAnnounceInterval);
 }
 
 static int port_set_delay_tmo(struct port *p)
 {
-	struct itimerspec tmo = {
-		{0, 0}, {0, 0}
-	};
-	int index;
 	if (p->delayMechanism == DM_P2P) {
 		return set_tmo_log(p->fda.fd[FD_DELAY_TIMER], 1,
 			       p->logMinPdelayReqInterval);
+	} else {
+		return set_tmo_random(p->fda.fd[FD_DELAY_TIMER], 0, 2,
+				p->logMinDelayReqInterval);
 	}
-	index = random() % TMTAB_MAX;
-	tmo.it_value = p->tmtab.ts[index];
-	return timerfd_settime(p->fda.fd[FD_DELAY_TIMER], 0, &tmo, NULL);
 }
 
 static int port_set_manno_tmo(struct port *p)
@@ -1138,6 +1190,9 @@ static int port_tx_sync(struct port *p)
 	if (!port_capable(p)) {
 		return 0;
 	}
+	if (port_sync_incapable(p)) {
+		return 0;
+	}
 	msg = msg_allocate();
 	if (!msg)
 		return -1;
@@ -1303,8 +1358,6 @@ static int port_initialize(struct port *p)
 	p->logSyncInterval         = p->pod.logSyncInterval;
 	p->logMinPdelayReqInterval = p->pod.logMinPdelayReqInterval;
 	p->neighborPropDelayThresh = p->pod.neighborPropDelayThresh;
-
-	tmtab_init(&p->tmtab, 1 + p->logMinDelayReqInterval);
 
 	for (i = 0; i < N_TIMER_FDS; i++) {
 		fd[i] = -1;
@@ -1486,10 +1539,12 @@ static void process_delay_resp(struct port *p, struct ptp_message *m)
 {
 	struct delay_req_msg *req;
 	struct delay_resp_msg *rsp = &m->delay_resp;
+	struct PortIdentity master;
 
 	if (!p->delay_req)
 		return;
 
+	master = clock_parent_identity(p->clock);
 	req = &p->delay_req->delay_req;
 
 	if (p->state != PS_UNCALIBRATED && p->state != PS_SLAVE)
@@ -1497,6 +1552,8 @@ static void process_delay_resp(struct port *p, struct ptp_message *m)
 	if (!pid_eq(&rsp->requestingPortIdentity, &req->hdr.sourcePortIdentity))
 		return;
 	if (rsp->hdr.sequenceId != ntohs(req->hdr.sequenceId))
+		return;
+	if (!pid_eq(&master, &m->header.sourcePortIdentity))
 		return;
 
 	clock_path_delay(p->clock, p->delay_req->hwts.ts, m->ts.pdu,
@@ -1507,7 +1564,6 @@ static void process_delay_resp(struct port *p, struct ptp_message *m)
 		p->logMinDelayReqInterval = rsp->hdr.logMessageInterval;
 		pr_notice("port %hu: minimum delay request interval 2^%d",
 			portnum(p), p->logMinDelayReqInterval);
-		tmtab_init(&p->tmtab, 1 + p->logMinDelayReqInterval);
 	}
 }
 
@@ -1561,6 +1617,7 @@ static int process_pdelay_req(struct port *p, struct ptp_message *m)
 	if (p->delayMechanism == DM_AUTO) {
 		pr_info("port %hu: peer detected, switch to P2P", portnum(p));
 		p->delayMechanism = DM_P2P;
+		port_set_delay_tmo(p);
 	}
 	if (p->peer_portid_valid) {
 		if (!pid_eq(&p->peer_portid, &m->header.sourcePortIdentity)) {
@@ -1711,7 +1768,7 @@ calc:
 	pd = tmv_sub(pd, c2);
 	pd = tmv_div(pd, 2);
 
-	p->peer_delay = mave_accumulate(p->avg_delay, pd);
+	p->peer_delay = filter_sample(p->delay_filter, pd);
 
 	p->peerMeanPathDelay = tmv_to_TimeInterval(p->peer_delay);
 
@@ -1840,7 +1897,7 @@ void port_close(struct port *p)
 		port_disable(p);
 	}
 	transport_destroy(p->trp);
-	mave_destroy(p->avg_delay);
+	filter_destroy(p->delay_filter);
 	free(p);
 }
 
@@ -1910,7 +1967,6 @@ static void port_e2e_transition(struct port *p, enum port_state next)
 		/* fall through */
 	case PS_SLAVE:
 		port_set_announce_tmo(p);
-		port_set_sync_rx_tmo(p);
 		port_set_delay_tmo(p);
 		break;
 	};
@@ -1952,7 +2008,6 @@ static void port_p2p_transition(struct port *p, enum port_state next)
 		/* fall through */
 	case PS_SLAVE:
 		port_set_announce_tmo(p);
-		port_set_sync_rx_tmo(p);
 		break;
 	};
 }
@@ -2076,6 +2131,9 @@ enum fsm_event port_event(struct port *p, int fd_index)
 		}
 		msg_put(msg);
 		return EV_NONE;
+	}
+	if (msg->hwts.ts.tv_sec && msg->hwts.ts.tv_nsec) {
+		clock_check_ts(p->clock, msg->hwts.ts);
 	}
 	if (port_ignore(p, msg)) {
 		msg_put(msg);
@@ -2298,9 +2356,10 @@ struct port *port_open(int phc_index,
 	p->delayMechanism = interface->dm;
 	p->versionNumber = PTP_VERSION;
 
-	p->avg_delay = mave_create(PORT_MAVE_LENGTH);
-	if (!p->avg_delay) {
-		pr_err("Failed to create moving average");
+	p->delay_filter = filter_create(interface->delay_filter,
+					interface->delay_filter_length);
+	if (!p->delay_filter) {
+		pr_err("Failed to create delay filter");
 		transport_destroy(p->trp);
 		free(p);
 		return NULL;

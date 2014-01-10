@@ -1,6 +1,7 @@
 /**
- * @file servo_private.h
- * @note Copyright (C) 2011 Richard Cochran <richardcochran@gmail.com>
+ * @file mmedian.h
+ * @brief Implements a moving median.
+ * @note Copyright (C) 2013 Miroslav Lichvar <mlichvar@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,22 +17,11 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#ifndef HAVE_SERVO_PRIVATE_H
-#define HAVE_SERVO_PRIVATE_H
+#ifndef HAVE_MMEDIAN_H
+#define HAVE_MMEDIAN_H
 
-#include "contain.h"
+#include "filter.h"
 
-struct servo {
-
-	void (*destroy)(struct servo *servo);
-
-	double (*sample)(struct servo *servo,
-			 int64_t offset, uint64_t local_ts,
-			 enum servo_state *state);
-
-	void (*sync_interval)(struct servo *servo, double interval);
-
-	void (*reset)(struct servo *servo);
-};
+struct filter *mmedian_create(int length);
 
 #endif

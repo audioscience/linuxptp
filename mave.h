@@ -20,16 +20,8 @@
 #ifndef HAVE_MAVE_H
 #define HAVE_MAVE_H
 
-#include "tmv.h"
+#include "filter.h"
 
-struct mave;
-
-struct mave *mave_create(int length);
-
-void mave_destroy(struct mave *m);
-
-tmv_t mave_accumulate(struct mave *m, tmv_t val);
-
-void mave_reset(struct mave *m);
+struct filter *mave_create(int length);
 
 #endif

@@ -22,12 +22,13 @@
 
 #include "ds.h"
 #include "dm.h"
+#include "filter.h"
 #include "transport.h"
 #include "servo.h"
 #include "sk.h"
 
 #define MAX_PORTS 8
-#define MAX_IFNAME_SIZE 16
+#define MAX_IFNAME_SIZE 108 /* = UNIX_PATH_MAX */
 
 /** Defines a network interface, with PTP options. */
 struct interface {
@@ -36,6 +37,8 @@ struct interface {
 	enum transport_type transport;
 	struct port_defaults pod;
 	struct sk_ts_info ts_info;
+	enum filter_type delay_filter;
+	int delay_filter_length;
 };
 
 #define CFG_IGNORE_DM           (1 << 0)
@@ -86,9 +89,12 @@ struct config {
 	double *pi_f_offset_const;
 	int *pi_max_frequency;
 
+	int *sanity_freq_limit;
+
 	unsigned char *ptp_dst_mac;
 	unsigned char *p2p_dst_mac;
 	unsigned char *udp6_scope;
+	char *uds_address;
 
 	int print_level;
 	int use_syslog;

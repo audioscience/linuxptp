@@ -1,4 +1,4 @@
-.TH PTP4l 8 "July 2013" "linuxptp"
+.TH PTP4l 8 "October 2013" "linuxptp"
 .SH NAME
 ptp4l \- PTP Boundary/Ordinary Clock
 
@@ -192,6 +192,15 @@ The default is UDPv4.
 .B neighborPropDelayThresh
 Upper limit for peer delay in nanoseconds. If the estimated peer delay is
 greater than this value the port is marked as not 802.1AS capable.
+.TP
+.B delay_filter
+Select the algorithm used to filter the measured delay and peer delay. Possible
+values are moving_average and moving_median.
+The default is moving_median.
+.TP
+.B delay_filter_length
+The length of the delay filter in samples.
+The default is 10.
 
 .SH PROGRAM AND CLOCK OPTIONS
 
@@ -203,7 +212,14 @@ The default is 1 (enabled).
 .TP
 .B slaveOnly
 The local clock is a slave-only clock if enabled.
+This option is only for use with 1588 clocks and should not be enabled
+for 802.1AS clocks.
 The default is 0 (disabled).
+.TP
+.B gmCapable
+If this option is enabled, then the local clock is able to become grand master.
+This is only for use with 802.1AS clocks and has no effect on 1588 clocks.
+The default is 1 (enabled).
 .TP
 .B priority1
 The priority1 attribute of the local clock. It is used in the best master
@@ -340,6 +356,13 @@ The maximum allowed frequency adjustment of the clock in parts per billion
 set to 0, the hardware limit will be used.
 The default is 900000000 (90%).
 .TP
+.B sanity_freq_limit
+The maximum allowed frequency offset between uncorrected clock and the system
+monotonic clock in parts per billion (ppb). This is used as a sanity check of
+the synchronized clock. When a larger offset is measured, a warning message
+will be printed and the servo will be reset. When set to 0, the sanity check is
+disabled. The default is 200000000 (20%).
+.TP
 .B ptp_dst_mac
 The MAC address where should be PTP messages sent.
 Relevant only with L2 transport. The default is 01:1B:19:00:00:00.
@@ -353,6 +376,10 @@ Specifies the desired scope for the IPv6 multicast messages.  This
 will be used as the second byte of the primary address.  This option
 is only relevant with IPv6 transport.  See RFC 4291.  The default is
 0x0E for the global scope.
+.TP
+.B uds_address
+Specifies the address of the UNIX domain socket for receiving local
+management messages. The default is /var/run/ptp4l.
 .TP
 .B logging_level
 The maximum logging level of messages which should be printed.

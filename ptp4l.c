@@ -32,6 +32,7 @@
 #include "sk.h"
 #include "transport.h"
 #include "udp6.h"
+#include "uds.h"
 #include "util.h"
 #include "version.h"
 
@@ -52,8 +53,10 @@ static struct config cfg_settings = {
 		},
 		.free_running = 0,
 		.freq_est_interval = 1,
+		.grand_master_capable = 1,
 		.stats_interval = 0,
 		.kernel_leap = 1,
+		.sanity_freq_limit = 200000000,
 		.time_source = INTERNAL_OSCILLATOR,
 		.clock_desc = {
 			.productDescription = {
@@ -69,6 +72,8 @@ static struct config cfg_settings = {
 			.userDescription      = { .max_symbols = 128 },
 			.manufacturerIdentity = { 0, 0, 0 },
 		},
+		.delay_filter = FILTER_MOVING_MEDIAN,
+		.delay_filter_length = 10,
 	},
 
 	.pod = {
@@ -111,6 +116,7 @@ static struct config cfg_settings = {
 	.ptp_dst_mac = ptp_dst_mac,
 	.p2p_dst_mac = p2p_dst_mac,
 	.udp6_scope = &udp6_scope,
+	.uds_address = uds_path,
 
 	.print_level = LOG_INFO,
 	.use_syslog = 1,
@@ -278,7 +284,14 @@ int main(int argc, char *argv[])
 	if (config && (c = config_read(config, &cfg_settings))) {
 		return c;
 	}
-	if (ds->flags & DDS_SLAVE_ONLY) {
+	if (!cfg_settings.dds.grand_master_capable &&
+	    ds->flags & DDS_SLAVE_ONLY) {
+		fprintf(stderr,
+			"Cannot mix 1588 slaveOnly with 802.1AS !gmCapable.\n");
+		return -1;
+	}
+	if (!cfg_settings.dds.grand_master_capable ||
+	    ds->flags & DDS_SLAVE_ONLY) {
 		ds->clockQuality.clockClass = 255;
 	}
 
