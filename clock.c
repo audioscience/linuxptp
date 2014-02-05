@@ -98,6 +98,7 @@ struct clock {
 	struct clock_stats stats;
 	int stats_interval;
 	struct clockcheck *sanity_check;
+	struct interface uds_interface;
 };
 
 struct clock the_clock;
@@ -577,19 +578,18 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 	int i, fadj = 0, max_adj = 0.0, sw_ts = timestamping == TS_SOFTWARE ? 1 : 0;
 	struct clock *c = &the_clock;
 	char phc[32];
-	struct interface udsif;
+	struct interface *udsif = &c->uds_interface;
 	struct timespec ts;
-
-	memset(&udsif, 0, sizeof(udsif));
-	snprintf(udsif.name, sizeof(udsif.name), "%s", uds_path);
-	udsif.transport = TRANS_UDS;
-	udsif.delay_filter_length = 1;
 
 	clock_gettime(CLOCK_REALTIME, &ts);
 	srandom(ts.tv_sec ^ ts.tv_nsec);
 
 	if (c->nports)
 		clock_destroy(c);
+
+	snprintf(udsif->name, sizeof(udsif->name), "%s", uds_path);
+	udsif->transport = TRANS_UDS;
+	udsif->delay_filter_length = 1;
 
 	c->free_running = dds->free_running;
 	c->freq_est_interval = dds->freq_est_interval;
@@ -696,7 +696,7 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 	/*
 	 * One extra port is for the UDS interface.
 	 */
-	c->port[i] = port_open(phc_index, timestamping, 0, &udsif, c);
+	c->port[i] = port_open(phc_index, timestamping, 0, udsif, c);
 	if (!c->port[i]) {
 		pr_err("failed to open the UDS port");
 		return NULL;
@@ -997,13 +997,13 @@ void clock_path_delay(struct clock *c, struct timespec req, struct timestamp rx,
 	pd = tmv_div(pd, 2);
 
 	if (pd < 0) {
-		pr_warning("negative path delay %10lld", pd);
-		pr_warning("path_delay = (t2 - t3) + (t4 - t1)");
-		pr_warning("t2 - t3 = %+10lld", t2 - t3);
-		pr_warning("t4 - t1 = %+10lld", t4 - t1);
-		pr_warning("c1 %10lld", c1);
-		pr_warning("c2 %10lld", c2);
-		pr_warning("c3 %10lld", c3);
+		pr_debug("negative path delay %10lld", pd);
+		pr_debug("path_delay = (t2 - t3) + (t4 - t1) - (c1 + c2 + c3)");
+		pr_debug("t2 - t3 = %+10lld", t2 - t3);
+		pr_debug("t4 - t1 = %+10lld", t4 - t1);
+		pr_debug("c1 %10lld", c1);
+		pr_debug("c2 %10lld", c2);
+		pr_debug("c3 %10lld", c3);
 	}
 
 	c->path_delay = filter_sample(c->delay_filter, pd);
