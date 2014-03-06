@@ -266,7 +266,7 @@ static int clock_management_get_response(struct clock *c, struct port *p,
 		tsn->master_offset = c->master_offset;
 		tsn->ingress_time = tmv_to_nanoseconds(c->t2);
 		tsn->cumulativeScaledRateOffset =
-			(UInteger32) (c->status.cumulativeScaledRateOffset +
+			(Integer32) (c->status.cumulativeScaledRateOffset +
 				      c->nrr * POW2_41 - POW2_41);
 		tsn->scaledLastGmPhaseChange = c->status.scaledLastGmPhaseChange;
 		tsn->gmTimeBaseIndicator = c->status.gmTimeBaseIndicator;
@@ -320,10 +320,6 @@ static int clock_management_set(struct clock *c, struct port *p,
 
 	switch (id) {
 	case GRANDMASTER_SETTINGS_NP:
-		if (p != c->port[c->nports]) {
-			/* Sorry, only allowed on the UDS port. */
-			break;
-		}
 		gsn = (struct grandmaster_settings_np *) tlv->data;
 		c->dds.clockQuality = gsn->clockQuality;
 		c->utc_offset = gsn->utc_offset;
@@ -646,6 +642,7 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 		pr_err("Failed to create delay filter");
 		return NULL;
 	}
+	c->nrr = 1.0;
 	c->stats_interval = dds->stats_interval;
 	c->stats.offset = stats_create();
 	c->stats.freq = stats_create();
@@ -842,6 +839,11 @@ int clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 			clock_management_send_error(p, msg, WRONG_LENGTH);
 			return changed;
 		}
+		if (p != c->port[c->nports]) {
+			/* Sorry, only allowed on the UDS port. */
+			clock_management_send_error(p, msg, NOT_SUPPORTED);
+			return changed;
+		}
 		if (clock_management_set(c, p, mgt->id, msg, &changed))
 			return changed;
 		break;
@@ -997,20 +999,20 @@ void clock_path_delay(struct clock *c, struct timespec req, struct timestamp rx,
 	pd = tmv_div(pd, 2);
 
 	if (pd < 0) {
-		pr_debug("negative path delay %10lld", pd);
+		pr_debug("negative path delay %10" PRId64, pd);
 		pr_debug("path_delay = (t2 - t3) + (t4 - t1) - (c1 + c2 + c3)");
-		pr_debug("t2 - t3 = %+10lld", t2 - t3);
-		pr_debug("t4 - t1 = %+10lld", t4 - t1);
-		pr_debug("c1 %10lld", c1);
-		pr_debug("c2 %10lld", c2);
-		pr_debug("c3 %10lld", c3);
+		pr_debug("t2 - t3 = %+10" PRId64, t2 - t3);
+		pr_debug("t4 - t1 = %+10" PRId64, t4 - t1);
+		pr_debug("c1 %10" PRId64, c1);
+		pr_debug("c2 %10" PRId64, c2);
+		pr_debug("c3 %10" PRId64, c3);
 	}
 
 	c->path_delay = filter_sample(c->delay_filter, pd);
 
 	c->cur.meanPathDelay = tmv_to_TimeInterval(c->path_delay);
 
-	pr_debug("path delay    %10lld %10lld", c->path_delay, pd);
+	pr_debug("path delay    %10" PRId64 " %10" PRId64, c->path_delay, pd);
 
 	if (c->stats.delay)
 		stats_add_value(c->stats.delay, tmv_to_nanoseconds(pd));
@@ -1188,6 +1190,7 @@ static void handle_state_decision_event(struct clock *c)
 		c->t1 = tmv_zero();
 		c->t2 = tmv_zero();
 		c->path_delay = 0;
+		c->nrr = 1.0;
 		fresh_best = 1;
 	}
 

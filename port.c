@@ -101,6 +101,7 @@ struct port {
 	Enumeration8        delayMechanism;
 	Integer8            logMinPdelayReqInterval;
 	UInteger32          neighborPropDelayThresh;
+	int                 min_neighbor_prop_delay;
 	enum fault_type     last_fault_type;
 	unsigned int        versionNumber; /*UInteger4*/
 	/* foreignMasterDS */
@@ -468,10 +469,19 @@ static int port_capable(struct port *p)
 
 	if (tmv_to_nanoseconds(p->peer_delay) >	p->neighborPropDelayThresh) {
 		if (p->asCapable)
-			pr_debug("port %hu: peer_delay (%lld) > neighborPropDelayThresh "
-				"(%lld), resetting asCapable", portnum(p),
+			pr_debug("port %hu: peer_delay (%" PRId64 ") > neighborPropDelayThresh "
+				"(%" PRId32 "), resetting asCapable", portnum(p),
 				tmv_to_nanoseconds(p->peer_delay),
 				p->neighborPropDelayThresh);
+		goto not_capable;
+	}
+
+	if (tmv_to_nanoseconds(p->peer_delay) <	p->min_neighbor_prop_delay) {
+		if (p->asCapable)
+			pr_debug("port %hu: peer_delay (%" PRId64 ") < min_neighbor_prop_delay "
+				"(%" PRId32 "), resetting asCapable", portnum(p),
+				tmv_to_nanoseconds(p->peer_delay),
+				p->min_neighbor_prop_delay);
 		goto not_capable;
 	}
 
@@ -855,6 +865,7 @@ static void port_nrate_initialize(struct port *p)
 	p->nrate.ingress1 = tmv_zero();
 	p->nrate.max_count = (1 << shift);
 	p->nrate.count = 0;
+	p->nrate.ratio = 1.0;
 	p->nrate.ratio_valid = 0;
 }
 
@@ -1377,6 +1388,7 @@ static int port_initialize(struct port *p)
 	p->logSyncInterval         = p->pod.logSyncInterval;
 	p->logMinPdelayReqInterval = p->pod.logMinPdelayReqInterval;
 	p->neighborPropDelayThresh = p->pod.neighborPropDelayThresh;
+	p->min_neighbor_prop_delay = p->pod.min_neighbor_prop_delay;
 
 	for (i = 0; i < N_TIMER_FDS; i++) {
 		fd[i] = -1;
@@ -1739,6 +1751,7 @@ static void port_peer_delay(struct port *p)
 	struct ptp_message *req = p->peer_delay_req;
 	struct ptp_message *rsp = p->peer_delay_resp;
 	struct ptp_message *fup = p->peer_delay_fup;
+	double adj_t41;
 
 	/* Check for response, validate port and sequence number. */
 
@@ -1782,7 +1795,8 @@ static void port_peer_delay(struct port *p)
 	t3 = timestamp_to_tmv(fup->ts.pdu);
 	c2 = correction_to_tmv(fup->header.correction);
 calc:
-	pd = tmv_sub(tmv_sub(t4, t1), tmv_sub(t3, t2));
+	adj_t41 = p->nrate.ratio * tmv_dbl(tmv_sub(t4, t1));
+	pd = tmv_sub(dbl_tmv(adj_t41), tmv_sub(t3, t2));
 	pd = tmv_sub(pd, c1);
 	pd = tmv_sub(pd, c2);
 	pd = tmv_div(pd, 2);
@@ -1791,7 +1805,7 @@ calc:
 
 	p->peerMeanPathDelay = tmv_to_TimeInterval(p->peer_delay);
 
-	pr_debug("pdelay %hu   %10lld %10lld", portnum(p), p->peer_delay, pd);
+	pr_debug("pdelay %hu   %10" PRId64 "%10" PRId64, portnum(p), p->peer_delay, pd);
 
 	if (p->pod.follow_up_info)
 		port_nrate_calculate(p, t3, t4, tmv_add(c1, c2));
