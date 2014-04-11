@@ -1765,6 +1765,10 @@ static void port_peer_delay(struct port *p)
 	if (!pid_eq(&rsp->pdelay_resp.requestingPortIdentity, &p->portIdentity))
 		return;
 
+	if (p->peer_portid_valid &&
+		!pid_eq(&p->peer_portid, &rsp->header.sourcePortIdentity))
+		return;
+
 	if (rsp->header.sequenceId != ntohs(req->header.sequenceId))
 		return;
 
@@ -1847,8 +1851,6 @@ static int process_pdelay_resp(struct port *p, struct ptp_message *m)
 				"unexpected peer port id %s",
 				portnum(p),
 				pid2str(&m->header.sourcePortIdentity));
-			p->peer_portid_valid = 0;
-			port_capable(p);
 		}
 	} else {
 		p->peer_portid_valid = 1;
