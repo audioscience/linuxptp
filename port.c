@@ -885,6 +885,7 @@ static void port_nrate_initialize(struct port *p)
 	p->nrate.count = 0;
 	p->nrate.ratio = 1.0;
 	p->nrate.ratio_valid = 0;
+	filter_reset(p->delay_filter);
 }
 
 static int port_set_announce_tmo(struct port *p)
