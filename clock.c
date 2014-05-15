@@ -476,6 +476,7 @@ static int clock_management_set(struct clock *c, struct port *p,
 {
 	int respond = 0;
 	struct management_tlv *tlv;
+	struct management_tlv_datum *mtd;
 	struct grandmaster_settings_np *gsn;
 	struct subscribe_events_np *sen;
 
@@ -495,6 +496,12 @@ static int clock_management_set(struct clock *c, struct port *p,
 		sen = (struct subscribe_events_np *)tlv->data;
 		clock_update_subscription(c, req, sen->bitmask,
 					  sen->duration);
+		respond = 1;
+		break;
+	case PRIORITY1:
+		mtd = (struct management_tlv_datum *) tlv->data;
+		c->dds.priority1 = mtd->val;
+		*changed = 1;
 		respond = 1;
 		break;
 	}

@@ -66,7 +66,7 @@ struct management_id idtab[] = {
 	{ "CURRENT_DATA_SET", CURRENT_DATA_SET, do_get_action },
 	{ "PARENT_DATA_SET", PARENT_DATA_SET, do_get_action },
 	{ "TIME_PROPERTIES_DATA_SET", TIME_PROPERTIES_DATA_SET, do_get_action },
-	{ "PRIORITY1", PRIORITY1, do_get_action },
+	{ "PRIORITY1", PRIORITY1, do_set_action },
 	{ "PRIORITY2", PRIORITY2, do_get_action },
 	{ "DOMAIN", DOMAIN, do_get_action },
 	{ "SLAVE_ONLY", SLAVE_ONLY, do_get_action },
@@ -494,6 +494,7 @@ static void do_set_action(int action, int index, char *str)
 {
 	struct grandmaster_settings_np gsn;
 	struct port_ds_np pnp;
+	struct management_tlv_datum mtd;
 	int cnt, code = idtab[index].code;
 	int leap_61, leap_59, utc_off_valid;
 	int ptp_timescale, time_traceable, freq_traceable;
@@ -569,6 +570,17 @@ static void do_set_action(int action, int index, char *str)
 			break;
 		}
 		pmc_send_set_action(pmc, code, &pnp, sizeof(pnp));
+		break;
+	case PRIORITY1:
+		cnt = sscanf(str, " %*s %*s "
+			     "priority1 %hhu ",
+			     &mtd.val);
+		if (cnt != 1) {
+			fprintf(stderr, "%s SET needs 1 value\n",
+				idtab[index].name);
+			break;
+		}
+		pmc_send_set_action(pmc, code, &mtd, sizeof(mtd));
 		break;
 	}
 }
