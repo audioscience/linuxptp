@@ -314,6 +314,7 @@ static int clock_management_set(struct clock *c, struct port *p,
 {
 	int respond = 0;
 	struct management_tlv *tlv;
+	struct management_tlv_datum *mtd;
 	struct grandmaster_settings_np *gsn;
 
 	tlv = (struct management_tlv *) req->management.suffix;
@@ -325,6 +326,12 @@ static int clock_management_set(struct clock *c, struct port *p,
 		c->utc_offset = gsn->utc_offset;
 		c->time_flags = gsn->time_flags;
 		c->time_source = gsn->time_source;
+		*changed = 1;
+		respond = 1;
+		break;
+	case PRIORITY1:
+		mtd = (struct management_tlv_datum *) tlv->data;
+		c->dds.priority1 = mtd->val;
 		*changed = 1;
 		respond = 1;
 		break;
