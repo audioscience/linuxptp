@@ -23,6 +23,7 @@
 #include "fd.h"
 #include "foreign.h"
 #include "fsm.h"
+#include "notification.h"
 #include "transport.h"
 
 /* forward declarations */
@@ -87,10 +88,29 @@ enum fsm_event port_event(struct port *port, int fd_index);
  * Forward a message on a given port.
  * @param port    A pointer previously obtained via port_open().
  * @param msg     The message to send. Must be in network byte order.
- * @param msglen  The length of the message in bytes.
  * @return        Zero on success, non-zero otherwise.
  */
-int port_forward(struct port *p, struct ptp_message *msg, int msglen);
+int port_forward(struct port *p, struct ptp_message *msg);
+
+/**
+ * Forward a message on a given port to the address stored in the message.
+ * @param port    A pointer previously obtained via port_open().
+ * @param msg     The message to send. Must be in network byte order.
+ * @return        Zero on success, non-zero otherwise.
+ */
+int port_forward_to(struct port *p, struct ptp_message *msg);
+
+/**
+ * Prepare message for transmission and send it to a given port. Note that
+ * a single message cannot be sent several times using this function, that
+ * would lead to corrupted data being sent. Use msg_pre_send and
+ * port_forward if you need to send single message to several ports.
+ * @param p        A pointer previously obtained via port_open().
+ * @param msg      The message to send.
+ * @param event    0 if the message is a general message, 1 if it is an
+ *                 event message.
+ */
+int port_prepare_and_send(struct port *p, struct ptp_message *msg, int event);
 
 /**
  * Obtain a port's identity.
@@ -104,7 +124,8 @@ struct PortIdentity port_identity(struct port *p);
  * @param p        A pointer previously obtained via port_open().
  * @param ingress  The port on which 'msg' was received.
  * @param msg      A management message.
- * @return         Zero if the message is valid, non-zero otherwise.
+ * @return         1 if the message was responded to, 0 if it did not apply
+ *                 to the port, -1 if it was invalid.
  */
 int port_manage(struct port *p, struct port *ingress, struct ptp_message *msg);
 
@@ -134,6 +155,28 @@ int port_management_error(struct PortIdentity pid, struct port *ingress,
 struct ptp_message *port_management_reply(struct PortIdentity pid,
 					  struct port *ingress,
 					  struct ptp_message *req);
+
+/**
+ * Allocate a standalone reply management message.
+ *
+ * See note in @ref port_management_reply description about freeing the
+ * message. Also note that the constructed message does not have
+ * targetPortIdentity and sequenceId filled.
+ *
+ * @param pid      The id of the responding port.
+ * @param port     The port to which the message will be sent.
+ * @return         Pointer to a message on success, NULL otherwise.
+ */
+struct ptp_message *port_management_notify(struct PortIdentity pid,
+					   struct port *port);
+
+/**
+ * Construct and send notification to subscribers about an event that
+ * occured on the port.
+ * @param p        The port.
+ * @param event    The identification of the event.
+ */
+void port_notify_event(struct port *p, enum notification event);
 
 /**
  * Open a network port.

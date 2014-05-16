@@ -22,6 +22,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "address.h"
 #include "bmc.h"
 #include "clock.h"
 #include "clockadj.h"
@@ -57,6 +58,15 @@ struct clock_stats {
 	struct stats *freq;
 	struct stats *delay;
 	unsigned int max_count;
+};
+
+struct clock_subscriber {
+	LIST_ENTRY(clock_subscriber) list;
+	uint8_t events[EVENT_BITMASK_CNT];
+	struct PortIdentity targetPortIdentity;
+	struct address addr;
+	UInteger16 sequenceId;
+	time_t expiration;
 };
 
 struct clock {
@@ -99,6 +109,7 @@ struct clock {
 	int stats_interval;
 	struct clockcheck *sanity_check;
 	struct interface uds_interface;
+	LIST_HEAD(clock_subscribers_head, clock_subscriber) subscribers;
 };
 
 struct clock the_clock;
@@ -110,9 +121,141 @@ static int cid_eq(struct ClockIdentity *a, struct ClockIdentity *b)
 	return 0 == memcmp(a, b, sizeof(*a));
 }
 
+#ifndef LIST_FOREACH_SAFE
+#define	LIST_FOREACH_SAFE(var, head, field, tvar)			\
+	for ((var) = LIST_FIRST((head));				\
+	    (var) && ((tvar) = LIST_NEXT((var), field), 1);		\
+	    (var) = (tvar))
+#endif
+
+static void remove_subscriber(struct clock_subscriber *s)
+{
+	LIST_REMOVE(s, list);
+	free(s);
+}
+
+static void clock_update_subscription(struct clock *c, struct ptp_message *req,
+				      uint8_t *bitmask, uint16_t duration)
+{
+	struct clock_subscriber *s;
+	int i, remove = 1;
+	struct timespec now;
+
+	for (i = 0; i < EVENT_BITMASK_CNT; i++) {
+		if (bitmask[i]) {
+			remove = 0;
+			break;
+		}
+	}
+
+	LIST_FOREACH(s, &c->subscribers, list) {
+		if (!memcmp(&s->targetPortIdentity, &req->header.sourcePortIdentity,
+		            sizeof(struct PortIdentity))) {
+			/* Found, update the transport address and event
+			 * mask. */
+			if (!remove) {
+				s->addr = req->address;
+				memcpy(s->events, bitmask, EVENT_BITMASK_CNT);
+				clock_gettime(CLOCK_MONOTONIC, &now);
+				s->expiration = now.tv_sec + duration;
+			} else {
+				remove_subscriber(s);
+			}
+			return;
+		}
+	}
+	if (remove)
+		return;
+	/* Not present yet, add the subscriber. */
+	s = malloc(sizeof(*s));
+	if (!s) {
+		pr_err("failed to allocate memory for a subscriber");
+		return;
+	}
+	s->targetPortIdentity = req->header.sourcePortIdentity;
+	s->addr = req->address;
+	memcpy(s->events, bitmask, EVENT_BITMASK_CNT);
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	s->expiration = now.tv_sec + duration;
+	s->sequenceId = 0;
+	LIST_INSERT_HEAD(&c->subscribers, s, list);
+}
+
+static void clock_get_subscription(struct clock *c, struct ptp_message *req,
+				   uint8_t *bitmask, uint16_t *duration)
+{
+	struct clock_subscriber *s;
+	struct timespec now;
+
+	LIST_FOREACH(s, &c->subscribers, list) {
+		if (!memcmp(&s->targetPortIdentity, &req->header.sourcePortIdentity,
+			    sizeof(struct PortIdentity))) {
+			memcpy(bitmask, s->events, EVENT_BITMASK_CNT);
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			if (s->expiration < now.tv_sec)
+				*duration = 0;
+			else
+				*duration = s->expiration - now.tv_sec;
+			return;
+		}
+	}
+	/* A client without entry means the client has no subscriptions. */
+	memset(bitmask, 0, EVENT_BITMASK_CNT);
+	*duration = 0;
+}
+
+static void clock_flush_subscriptions(struct clock *c)
+{
+	struct clock_subscriber *s, *tmp;
+
+	LIST_FOREACH_SAFE(s, &c->subscribers, list, tmp) {
+		remove_subscriber(s);
+	}
+}
+
+static void clock_prune_subscriptions(struct clock *c)
+{
+	struct clock_subscriber *s, *tmp;
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	LIST_FOREACH_SAFE(s, &c->subscribers, list, tmp) {
+		if (s->expiration <= now.tv_sec) {
+			pr_info("subscriber %s timed out",
+				pid2str(&s->targetPortIdentity));
+			remove_subscriber(s);
+		}
+	}
+}
+
+void clock_send_notification(struct clock *c, struct ptp_message *msg,
+			     int msglen, enum notification event)
+{
+	unsigned int event_pos = event / 8;
+	uint8_t mask = 1 << (event % 8);
+	struct port *uds = c->port[c->nports];
+	struct clock_subscriber *s;
+
+	LIST_FOREACH(s, &c->subscribers, list) {
+		if (!(s->events[event_pos] & mask))
+			continue;
+		/* send event */
+		msg->header.sequenceId = htons(s->sequenceId);
+		s->sequenceId++;
+		msg->management.targetPortIdentity.clockIdentity =
+			s->targetPortIdentity.clockIdentity;
+		msg->management.targetPortIdentity.portNumber =
+			htons(s->targetPortIdentity.portNumber);
+		msg->address = s->addr;
+		port_forward_to(uds, msg);
+	}
+}
+
 void clock_destroy(struct clock *c)
 {
 	int i;
+
+	clock_flush_subscriptions(c);
 	for (i = 0; i < c->nports; i++) {
 		port_close(c->port[i]);
 		close(c->fault_fd[i]);
@@ -171,22 +314,22 @@ static void clock_management_send_error(struct port *p,
 		pr_err("failed to send management error status");
 }
 
-static int clock_management_get_response(struct clock *c, struct port *p,
-					 int id, struct ptp_message *req)
+/* The 'p' and 'req' paremeters are needed for the GET actions that operate
+ * on per-client datasets. If such actions do not apply to the caller, it is
+ * allowed to pass both of them as NULL.
+ */
+static int clock_management_fill_response(struct clock *c, struct port *p,
+					  struct ptp_message *req,
+					  struct ptp_message *rsp, int id)
 {
-	int datalen = 0, err, pdulen, respond = 0;
+	int datalen = 0, respond = 0;
 	struct management_tlv *tlv;
 	struct management_tlv_datum *mtd;
-	struct ptp_message *rsp;
 	struct time_status_np *tsn;
 	struct grandmaster_settings_np *gsn;
-	struct PortIdentity pid = port_identity(p);
+	struct subscribe_events_np *sen;
 	struct PTPText *text;
 
-	rsp = port_management_reply(pid, p, req);
-	if (!rsp) {
-		return 0;
-	}
 	tlv = (struct management_tlv *) rsp->management.suffix;
 	tlv->type = TLV_MANAGEMENT;
 	tlv->id = id;
@@ -288,6 +431,15 @@ static int clock_management_get_response(struct clock *c, struct port *p,
 		datalen = sizeof(*gsn);
 		respond = 1;
 		break;
+	case SUBSCRIBE_EVENTS_NP:
+		if (p != c->port[c->nports]) {
+			/* Only the UDS port allowed. */
+			break;
+		}
+		sen = (struct subscribe_events_np *)tlv->data;
+		clock_get_subscription(c, req, sen->bitmask, &sen->duration);
+		respond = 1;
+		break;
 	}
 	if (respond) {
 		if (datalen % 2) {
@@ -295,18 +447,28 @@ static int clock_management_get_response(struct clock *c, struct port *p,
 			datalen++;
 		}
 		tlv->length = sizeof(tlv->id) + datalen;
-		pdulen = rsp->header.messageLength + sizeof(*tlv) + datalen;
-		rsp->header.messageLength = pdulen;
+		rsp->header.messageLength += sizeof(*tlv) + datalen;
 		rsp->tlv_count = 1;
-		err = msg_pre_send(rsp);
-		if (err) {
-			goto out;
-		}
-		err = port_forward(p, rsp, pdulen);
 	}
-out:
+	return respond;
+}
+
+static int clock_management_get_response(struct clock *c, struct port *p,
+					 int id, struct ptp_message *req)
+{
+	struct PortIdentity pid = port_identity(p);
+	struct ptp_message *rsp;
+	int respond;
+
+	rsp = port_management_reply(pid, p, req);
+	if (!rsp) {
+		return 0;
+	}
+	respond = clock_management_fill_response(c, p, req, rsp, id);
+	if (respond)
+		port_prepare_and_send(p, rsp, 0);
 	msg_put(rsp);
-	return respond ? 1 : 0;
+	return respond;
 }
 
 static int clock_management_set(struct clock *c, struct port *p,
@@ -316,6 +478,7 @@ static int clock_management_set(struct clock *c, struct port *p,
 	struct management_tlv *tlv;
 	struct management_tlv_datum *mtd;
 	struct grandmaster_settings_np *gsn;
+	struct subscribe_events_np *sen;
 
 	tlv = (struct management_tlv *) req->management.suffix;
 
@@ -327,6 +490,12 @@ static int clock_management_set(struct clock *c, struct port *p,
 		c->time_flags = gsn->time_flags;
 		c->time_source = gsn->time_source;
 		*changed = 1;
+		respond = 1;
+		break;
+	case SUBSCRIBE_EVENTS_NP:
+		sen = (struct subscribe_events_np *)tlv->data;
+		clock_update_subscription(c, req, sen->bitmask,
+					  sen->duration);
 		respond = 1;
 		break;
 	case PRIORITY1:
@@ -682,6 +851,8 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 
 	clock_sync_interval(c, 0);
 
+	LIST_INIT(&c->subscribers);
+
 	for (i = 0; i < count; i++) {
 		c->port[i] = port_open(phc_index, timestamping, 1+i, &iface[i], c);
 		if (!c->port[i]) {
@@ -798,7 +969,7 @@ static void clock_forward_mgmt_msg(struct clock *c, struct port *p, struct ptp_m
 					msg->management.boundaryHops--;
 					msg_pre_send(msg);
 				}
-				if (port_forward(fwd, msg, pdulen))
+				if (port_forward(fwd, msg))
 					pr_err("port %d: management forward failed", i + 1);
 			}
 		}
@@ -811,7 +982,7 @@ static void clock_forward_mgmt_msg(struct clock *c, struct port *p, struct ptp_m
 
 int clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 {
-	int changed = 0, i;
+	int changed = 0, i, res, answers;
 	struct management_tlv *mgt;
 	struct ClockIdentity *tcid, wildcard = {
 		{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
@@ -855,13 +1026,18 @@ int clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 			return changed;
 		break;
 	case COMMAND:
-		if (mgt->length != 2) {
-			clock_management_send_error(p, msg, WRONG_LENGTH);
-			return changed;
-		}
 		break;
 	default:
 		return changed;
+	}
+
+	switch (mgt->id) {
+	case PORT_PROPERTIES_NP:
+		if (p != c->port[c->nports]) {
+			/* Only the UDS port allowed. */
+			clock_management_send_error(p, msg, NOT_SUPPORTED);
+			return 0;
+		}
 	}
 
 	switch (mgt->id) {
@@ -897,16 +1073,54 @@ int clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 	case PRIMARY_DOMAIN:
 	case TIME_STATUS_NP:
 	case GRANDMASTER_SETTINGS_NP:
+	case SUBSCRIBE_EVENTS_NP:
 		clock_management_send_error(p, msg, NOT_SUPPORTED);
 		break;
 	default:
+		answers = 0;
 		for (i = 0; i < c->nports; i++) {
-			if (port_manage(c->port[i], p, msg))
-				break;
+			res = port_manage(c->port[i], p, msg);
+			if (res < 0)
+				return changed;
+			if (res > 0)
+				answers++;
+		}
+		if (!answers) {
+			/* IEEE 1588 Interpretation #21 suggests to use
+			 * WRONG_VALUE for ports that do not exist */
+			clock_management_send_error(p, msg, WRONG_VALUE);
 		}
 		break;
 	}
 	return changed;
+}
+
+void clock_notify_event(struct clock *c, enum notification event)
+{
+	struct port *uds = c->port[c->nports];
+	struct PortIdentity pid = port_identity(uds);
+	struct ptp_message *msg;
+	UInteger16 msg_len;
+	int id;
+
+	switch (event) {
+	/* set id */
+	default:
+		return;
+	}
+	/* targetPortIdentity and sequenceId will be filled by
+	 * clock_send_notification */
+	msg = port_management_notify(pid, uds);
+	if (!msg)
+		return;
+	if (!clock_management_fill_response(c, NULL, NULL, msg, id))
+		goto err;
+	msg_len = msg->header.messageLength;
+	if (msg_pre_send(msg))
+		goto err;
+	clock_send_notification(c, msg, msg_len, event);
+err:
+	msg_put(msg);
 }
 
 struct parent_ds *clock_parent_ds(struct clock *c)
@@ -977,6 +1191,7 @@ int clock_poll(struct clock *c)
 	if (sde)
 		handle_state_decision_event(c);
 
+	clock_prune_subscriptions(c);
 	return 0;
 }
 
@@ -984,6 +1199,7 @@ void clock_path_delay(struct clock *c, struct timespec req, struct timestamp rx,
 		      Integer64 correction)
 {
 	tmv_t c1, c2, c3, pd, t1, t2, t3, t4;
+	double rr;
 
 	if (tmv_is_zero(c->t1))
 		return;
@@ -995,21 +1211,27 @@ void clock_path_delay(struct clock *c, struct timespec req, struct timestamp rx,
 	t2 = c->t2;
 	t3 = timespec_to_tmv(req);
 	t4 = timestamp_to_tmv(rx);
+	rr = clock_rate_ratio(c);
 
 	/*
-	 * c->path_delay = (t2 - t3) + (t4 - t1);
+	 * c->path_delay = (t2 - t3) * rr + (t4 - t1);
 	 * c->path_delay -= c_sync + c_fup + c_delay_resp;
 	 * c->path_delay /= 2.0;
 	 */
-	pd = tmv_add(tmv_sub(t2, t3), tmv_sub(t4, t1));
+
+	pd = tmv_sub(t2, t3);
+	if (rr != 1.0)
+		pd = dbl_tmv(tmv_dbl(pd) * rr);
+	pd = tmv_add(pd, tmv_sub(t4, t1));
 	pd = tmv_sub(pd, tmv_add(c1, tmv_add(c2, c3)));
 	pd = tmv_div(pd, 2);
 
 	if (pd < 0) {
 		pr_debug("negative path delay %10" PRId64, pd);
-		pr_debug("path_delay = (t2 - t3) + (t4 - t1) - (c1 + c2 + c3)");
+		pr_debug("path_delay = (t2 - t3) * rr + (t4 - t1) - (c1 + c2 + c3)");
 		pr_debug("t2 - t3 = %+10" PRId64, t2 - t3);
 		pr_debug("t4 - t1 = %+10" PRId64, t4 - t1);
+		pr_debug("rr = %.9f", rr);
 		pr_debug("c1 %10" PRId64, c1);
 		pr_debug("c2 %10" PRId64, c2);
 		pr_debug("c3 %10" PRId64, c3);
@@ -1252,4 +1474,9 @@ void clock_check_ts(struct clock *c, struct timespec ts)
 			      ts.tv_sec * NS_PER_SEC + ts.tv_nsec)) {
 		servo_reset(c->servo);
 	}
+}
+
+double clock_rate_ratio(struct clock *c)
+{
+	return servo_rate_ratio(c->servo);
 }

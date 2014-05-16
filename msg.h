@@ -24,8 +24,8 @@
 #include <sys/queue.h>
 #include <time.h>
 
+#include "address.h"
 #include "ddt.h"
-#include "transport.h"
 #include "tlv.h"
 
 #define PTP_VERSION 2
@@ -54,6 +54,19 @@
 #define PTP_TIMESCALE  (1<<3)
 #define TIME_TRACEABLE (1<<4)
 #define FREQ_TRACEABLE (1<<5)
+
+enum timestamp_type {
+	TS_SOFTWARE,
+	TS_HARDWARE,
+	TS_LEGACY_HW,
+	TS_ONESTEP,
+};
+
+struct hw_timestamp {
+	enum timestamp_type type;
+	struct timespec ts;
+	struct timespec sw;
+};
 
 enum controlField {
 	CTL_SYNC,
@@ -201,6 +214,11 @@ struct ptp_message {
 	 * SO_TIMESTAMPING socket option.
 	 */
 	struct hw_timestamp hwts;
+	/**
+	 * Contains the address this message was received from or should be
+	 * sent to.
+	 */
+	struct address address;
 	/**
 	 * Contains the number of TLVs in the suffix.
 	 */

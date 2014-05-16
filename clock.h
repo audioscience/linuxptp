@@ -23,6 +23,7 @@
 #include "dm.h"
 #include "ds.h"
 #include "config.h"
+#include "notification.h"
 #include "servo.h"
 #include "tlv.h"
 #include "tmv.h"
@@ -132,6 +133,24 @@ void clock_install_fda(struct clock *c, struct port *p, struct fdarray fda);
  *             implies a state decision event, zero otherwise.
  */
 int clock_manage(struct clock *c, struct port *p, struct ptp_message *msg);
+
+/**
+ * Send notification about an event to all subscribers.
+ * @param c      The clock instance.
+ * @param msg    The PTP message to send, in network byte order.
+ * @param msglen The length of the message in bytes.
+ * @param event  The event that occured.
+ */
+void clock_send_notification(struct clock *c, struct ptp_message *msg,
+			     int msglen, enum notification event);
+
+/**
+ * Construct and send notification to subscribers about an event that
+ * occured on the clock.
+ * @param c      The clock instance.
+ * @param event  The identification of the event.
+ */
+void clock_notify_event(struct clock *c, enum notification event);
 
 /**
  * Obtain a clock's parent data set.
@@ -252,5 +271,12 @@ int clock_num_ports(struct clock *c);
  * @param ts The time stamp.
  */
 void clock_check_ts(struct clock *c, struct timespec ts);
+
+/**
+ * Obtain ratio between master's frequency and current clock frequency.
+ * @param c  The clock instance.
+ * @return   The rate ratio, 1.0 is returned when not known.
+ */
+double clock_rate_ratio(struct clock *c);
 
 #endif

@@ -22,6 +22,30 @@
 
 #include <stdint.h>
 
+/**
+ * When set to a non-zero value, this variable controls the maximum allowed
+ * offset before a clock jump occurs instead of the default clock-slewing
+ * mechanism.
+ *
+ * Note that this variable is measured in seconds, and allows fractional values.
+ */
+extern double servo_step_threshold;
+
+/**
+ * When set to zero, the clock is not stepped on start. When set to a non-zero
+ * value, the value bahaves as a threshold and the clock is stepped on start if
+ * the offset is bigger than the threshold.
+ *
+ * Note that this variable is measured in seconds, and allows fractional values.
+ */
+extern double servo_first_step_threshold;
+
+/**
+ * When set to a non-zero value, this variable sets an additional limit for
+ * the frequency adjustment of the clock. It's in ppb.
+ */
+extern int servo_max_frequency;
+
 /** Opaque type */
 struct servo;
 
@@ -30,6 +54,7 @@ struct servo;
  */
 enum servo_type {
 	CLOCK_SERVO_PI,
+	CLOCK_SERVO_LINREG,
 };
 
 /**
@@ -98,5 +123,12 @@ void servo_sync_interval(struct servo *servo, double interval);
  * @param servo   Pointer to a servo obtained via @ref servo_create().
  */
 void servo_reset(struct servo *servo);
+
+/**
+ * Obtain ratio between master's frequency and current servo frequency.
+ * @param servo   Pointer to a servo obtained via @ref servo_create().
+ * @return   The rate ratio, 1.0 is returned when not known.
+ */
+double servo_rate_ratio(struct servo *servo);
 
 #endif

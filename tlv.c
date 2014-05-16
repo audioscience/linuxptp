@@ -62,6 +62,8 @@ static int mgt_post_recv(struct management_tlv *m, uint16_t data_len,
 	struct port_ds_np *pdsnp;
 	struct time_status_np *tsn;
 	struct grandmaster_settings_np *gsn;
+	struct subscribe_events_np *sen;
+	struct port_properties_np *ppn;
 	struct mgmt_clock_description *cd;
 	int extra_len = 0, len;
 	uint8_t *buf;
@@ -242,6 +244,29 @@ static int mgt_post_recv(struct management_tlv *m, uint16_t data_len,
 		pdsnp->neighborPropDelayThresh = ntohl(pdsnp->neighborPropDelayThresh);
 		pdsnp->asCapable = ntohl(pdsnp->asCapable);
 		break;
+	case SUBSCRIBE_EVENTS_NP:
+		if (data_len != sizeof(struct subscribe_events_np))
+			goto bad_length;
+		sen = (struct subscribe_events_np *)m->data;
+		sen->duration = ntohs(sen->duration);
+		break;
+	case PORT_PROPERTIES_NP:
+		if (data_len < sizeof(struct port_properties_np))
+			goto bad_length;
+		ppn = (struct port_properties_np *)m->data;
+		ppn->portIdentity.portNumber = ntohs(ppn->portIdentity.portNumber);
+		extra_len = sizeof(struct port_properties_np);
+		extra_len += ppn->interface.length;
+		break;
+	case SAVE_IN_NON_VOLATILE_STORAGE:
+	case RESET_NON_VOLATILE_STORAGE:
+	case INITIALIZE:
+	case FAULT_LOG_RESET:
+	case ENABLE_PORT:
+	case DISABLE_PORT:
+		if (data_len != 0)
+			goto bad_length;
+		break;
 	}
 	if (extra_len) {
 		if (extra_len % 2)
@@ -264,6 +289,8 @@ static void mgt_pre_send(struct management_tlv *m, struct tlv_extra *extra)
 	struct port_ds_np *pdsnp;
 	struct time_status_np *tsn;
 	struct grandmaster_settings_np *gsn;
+	struct subscribe_events_np *sen;
+	struct port_properties_np *ppn;
 	struct mgmt_clock_description *cd;
 	switch (m->id) {
 	case CLOCK_DESCRIPTION:
@@ -327,6 +354,14 @@ static void mgt_pre_send(struct management_tlv *m, struct tlv_extra *extra)
 		pdsnp = (struct port_ds_np *) m->data;
 		pdsnp->neighborPropDelayThresh = htonl(pdsnp->neighborPropDelayThresh);
 		pdsnp->asCapable = htonl(pdsnp->asCapable);
+		break;
+	case SUBSCRIBE_EVENTS_NP:
+		sen = (struct subscribe_events_np *)m->data;
+		sen->duration = htons(sen->duration);
+		break;
+	case PORT_PROPERTIES_NP:
+		ppn = (struct port_properties_np *)m->data;
+		ppn->portIdentity.portNumber = htons(ppn->portIdentity.portNumber);
 		break;
 	}
 }

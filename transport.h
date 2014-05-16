@@ -24,6 +24,7 @@
 #include <inttypes.h>
 
 #include "fd.h"
+#include "msg.h"
 
 /* Values from networkProtocol enumeration 7.4.1 Table 3 */
 enum transport_type {
@@ -47,19 +48,6 @@ enum transport_event {
 	TRANS_ONESTEP,
 };
 
-enum timestamp_type {
-	TS_SOFTWARE,
-	TS_HARDWARE,
-	TS_LEGACY_HW,
-	TS_ONESTEP,
-};
-
-struct hw_timestamp {
-	enum timestamp_type type;
-	struct timespec ts;
-	struct timespec sw;
-};
-
 struct transport;
 
 int transport_close(struct transport *t, struct fdarray *fda);
@@ -67,14 +55,46 @@ int transport_close(struct transport *t, struct fdarray *fda);
 int transport_open(struct transport *t, const char *name,
 		   struct fdarray *fda, enum timestamp_type tt);
 
-int transport_recv(struct transport *t, int fd,
-		   void *buf, int buflen, struct hw_timestamp *hwts);
+int transport_recv(struct transport *t, int fd, struct ptp_message *msg);
 
+/**
+ * Sends the PTP message using the given transport. The message is sent to
+ * the default (usually multicast) address, any address field in the
+ * ptp_message itself is ignored.
+ * @param t	The transport.
+ * @param fda	The array of descriptors filled in by transport_open.
+ * @param event	1 for event message, 0 for general message.
+ * @param msg	The message to send.
+ * @return	Number of bytes send, or negative value in case of an error.
+ */
 int transport_send(struct transport *t, struct fdarray *fda, int event,
-		   void *buf, int buflen, struct hw_timestamp *hwts);
+		   struct ptp_message *msg);
 
+/**
+ * Sends the PTP message using the given transport. The message is sent to
+ * the address used for p2p delay measurements (usually a multicast
+ * address), any address field in the ptp_message itself is ignored.
+ * @param t	The transport.
+ * @param fda	The array of descriptors filled in by transport_open.
+ * @param event	1 for event message, 0 for general message.
+ * @param msg	The message to send.
+ * @return	Number of bytes send, or negative value in case of an error.
+ */
 int transport_peer(struct transport *t, struct fdarray *fda, int event,
-		   void *buf, int buflen, struct hw_timestamp *hwts);
+		   struct ptp_message *msg);
+
+/**
+ * Sends the PTP message using the given transport. The address has to be
+ * provided in the address field of the message.
+ * @param t	The transport.
+ * @param fda	The array of descriptors filled in by transport_open.
+ * @param event	1 for event message, 0 for general message.
+ * @param msg	The message to send. The address of the destination has to
+ *		be set in the address field.
+ * @return	Number of bytes send, or negative value in case of an error.
+ */
+int transport_sendto(struct transport *t, struct fdarray *fda, int event,
+		     struct ptp_message *msg);
 
 /**
  * Returns the transport's type.

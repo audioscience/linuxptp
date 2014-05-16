@@ -1,7 +1,7 @@
 /**
- * @file ether.h
- * @brief Provides definitions useful when working with Ethernet packets.
- * @note Copyright (C) 2012 Richard Cochran <richardcochran@gmail.com>
+ * @file address.h
+ * @brief Definition of a structure to hold an address.
+ * @note Copyright (C) 2014 Red Hat, Inc., Jiri Benc <jbenc@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,33 +17,22 @@
  * with this program; if not, write to the Free Software Foundation, Inc.,
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
-#ifndef HAVE_ETHER_H
-#define HAVE_ETHER_H
+#ifndef HAVE_ADDRESS_H
+#define HAVE_ADDRESS_H
 
-#include <stdint.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
-#define MAC_LEN 6
-#define PTP_DST_MAC 0x01, 0x1B, 0x19, 0x00, 0x00, 0x00
-#define P2P_DST_MAC 0x01, 0x80, 0xC2, 0x00, 0x00, 0x0E
-
-typedef uint8_t eth_addr[MAC_LEN];
-
-struct eth_hdr {
-	eth_addr dst;
-	eth_addr src;
-	uint16_t type;
-} __attribute__((packed));
-
-#define VLAN_HLEN 4
-
-struct vlan_hdr {
-	eth_addr dst;
-	eth_addr src;
-	uint16_t tpid;
-	uint16_t tci;
-	uint16_t type;
-} __attribute__((packed));
-
-#define OFF_ETYPE (2 * sizeof(eth_addr))
+struct address {
+	socklen_t len;
+	union {
+		struct sockaddr_storage ss;
+		struct sockaddr_in sin;
+		struct sockaddr_in6 sin6;
+		struct sockaddr_un sun;
+		struct sockaddr sa;
+	};
+};
 
 #endif
