@@ -87,6 +87,7 @@ struct port {
 	unsigned int multiple_seq_pdr_count;
 	unsigned int multiple_seq_mpid_pdr_count;
 	unsigned int multiple_pdr_detected;
+	unsigned int foreign_master_threshold;
 	/* portDS */
 	struct port_defaults pod;
 	struct PortIdentity portIdentity;
@@ -266,14 +267,15 @@ static void fc_clear(struct foreign_clock *fc)
 	}
 }
 
-static void fc_prune(struct foreign_clock *fc)
+static void fc_prune(struct foreign_clock *fc,
+			unsigned int foreign_master_threshold)
 {
 	struct timespec now;
 	struct ptp_message *m;
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
 
-	while (fc->n_messages > FOREIGN_MASTER_THRESHOLD) {
+	while (fc->n_messages > foreign_master_threshold) {
 		m = TAILQ_LAST(&fc->messages, messages);
 		TAILQ_REMOVE(&fc->messages, m, list);
 		fc->n_messages--;
@@ -330,8 +332,8 @@ static int add_foreign_master(struct port *p, struct ptp_message *m)
 	/*
 	 * If this message breaks the threshold, that is an important change.
 	 */
-	fc_prune(fc);
-	if (FOREIGN_MASTER_THRESHOLD - 1 == fc->n_messages)
+	fc_prune(fc, p->foreign_master_threshold);
+	if (p->foreign_master_threshold - 1 == fc->n_messages)
 		broke_threshold = 1;
 
 	/*
@@ -1383,6 +1385,7 @@ static int port_initialize(struct port *p)
 	p->logMinPdelayReqInterval = p->pod.logMinPdelayReqInterval;
 	p->neighborPropDelayThresh = p->pod.neighborPropDelayThresh;
 	p->min_neighbor_prop_delay = p->pod.min_neighbor_prop_delay;
+	p->foreign_master_threshold= p->pod.foreign_master_threshold;
 
 	for (i = 0; i < N_TIMER_FDS; i++) {
 		fd[i] = -1;
@@ -1461,7 +1464,7 @@ static int update_current_master(struct port *p, struct ptp_message *m)
 		dad->path_length = path_length(ptt);
 	}
 	port_set_announce_tmo(p);
-	fc_prune(fc);
+	fc_prune(fc, p->foreign_master_threshold);
 	msg_get(m);
 	fc->n_messages++;
 	TAILQ_INSERT_HEAD(&fc->messages, m, list);
@@ -1927,9 +1930,9 @@ struct foreign_clock *port_compute_best(struct port *p)
 
 		announce_to_dataset(tmp, p->clock, &fc->dataset);
 
-		fc_prune(fc);
+		fc_prune(fc, p->foreign_master_threshold);
 
-		if (fc->n_messages < FOREIGN_MASTER_THRESHOLD)
+		if (fc->n_messages < p->foreign_master_threshold)
 			continue;
 
 		if (!p->best)

@@ -197,6 +197,10 @@ greater than this value the port is marked as not 802.1AS capable.
 Lower limit for peer delay in nanoseconds. If the estimated peer delay is
 smaller than this value the port is marked as not 802.1AS capable.
 .TP
+.B foreign_master_threshold
+Minimum number of announce messages received from a foreign master to make it
+eligible for the BMC algorithm.
+.TP
 .B delay_filter
 Select the algorithm used to filter the measured delay and peer delay. Possible
 values are moving_average and moving_median.
