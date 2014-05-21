@@ -411,7 +411,7 @@ static int clock_management_fill_response(struct clock *c, struct port *p,
 		tsn->cumulativeScaledRateOffset =
 			(Integer32) (c->status.cumulativeScaledRateOffset +
 				      c->nrr * POW2_41 - POW2_41);
-		tsn->scaledLastGmPhaseChange = c->status.scaledLastGmPhaseChange;
+		tsn->scaledLastGmFreqChange = c->status.scaledLastGmFreqChange;
 		tsn->gmTimeBaseIndicator = c->status.gmTimeBaseIndicator;
 		tsn->lastGmPhaseChange = c->status.lastGmPhaseChange;
 		if (cid_eq(&c->dad.pds.grandmasterIdentity, &c->dds.clockIdentity))
@@ -923,7 +923,7 @@ UInteger8 clock_domain_number(struct clock *c)
 void clock_follow_up_info(struct clock *c, struct follow_up_info_tlv *f)
 {
 	c->status.cumulativeScaledRateOffset = f->cumulativeScaledRateOffset;
-	c->status.scaledLastGmPhaseChange = f->scaledLastGmPhaseChange;
+	c->status.scaledLastGmFreqChange = f->scaledLastGmFreqChange;
 	c->status.gmTimeBaseIndicator = f->gmTimeBaseIndicator;
 	memcpy(&c->status.lastGmPhaseChange, &f->lastGmPhaseChange,
 	       sizeof(c->status.lastGmPhaseChange));
