@@ -886,6 +886,8 @@ static void port_nrate_initialize(struct port *p)
 	p->nrate.max_count = (1 << shift);
 	p->nrate.count = 0;
 	p->nrate.ratio = 1.0;
+	p->peer_delay = p->pod.min_neighbor_prop_delay-1;
+	p->peerMeanPathDelay = p->pod.min_neighbor_prop_delay-1;
 	p->nrate.ratio_valid = 0;
 	filter_reset(p->delay_filter);
 }
@@ -1376,7 +1378,8 @@ static int port_initialize(struct port *p)
 	p->multiple_pdr_detected   = 0;
 	p->last_fault_type         = FT_UNSPECIFIED;
 	p->logMinDelayReqInterval  = p->pod.logMinDelayReqInterval;
-	p->peerMeanPathDelay       = 0;
+	p->peer_delay              = p->pod.min_neighbor_prop_delay-1;
+	p->peerMeanPathDelay       = p->pod.min_neighbor_prop_delay-1;
 	p->logAnnounceInterval     = p->pod.logAnnounceInterval;
 	p->announceReceiptTimeout  = p->pod.announceReceiptTimeout;
 	p->syncReceiptTimeout      = p->pod.syncReceiptTimeout;
@@ -1778,6 +1781,12 @@ static void port_peer_delay(struct port *p)
 	t3 = timestamp_to_tmv(fup->ts.pdu);
 	c2 = correction_to_tmv(fup->header.correction);
 calc:
+	if (p->pod.follow_up_info) {
+		port_nrate_calculate(p, t3, t4, tmv_add(c1, c2));
+		if (!p->nrate.ratio_valid)
+			goto done;
+	}
+
 	adj_t41 = p->nrate.ratio * clock_rate_ratio(p->clock) *
 			tmv_dbl(tmv_sub(t4, t1));
 	pd = tmv_sub(dbl_tmv(adj_t41), tmv_sub(t3, t2));
@@ -1785,19 +1794,32 @@ calc:
 	pd = tmv_sub(pd, c2);
 	pd = tmv_div(pd, 2);
 
+	{
+		pr_debug("t1 %" PRId64, t1);
+		pr_debug("t2 %" PRId64, t2);
+		pr_debug("t3 %" PRId64, t3);
+		pr_debug("t4 %" PRId64, t4);
+		pr_debug("c1 %" PRId64, c1);
+		pr_debug("c2 %" PRId64, c2);
+		pr_debug("nrr = %.9f", p->nrate.ratio);
+		pr_debug("crr = %.9f", clock_rate_ratio(p->clock));
+		pr_debug("t3 - t2 = %" PRId64, tmv_sub(t3, t2));
+		pr_debug("t4 - t1 = %" PRId64, tmv_sub(t4, t1));
+		pr_debug("nrr*crr*(t4 - t1) = %" PRId64, dbl_tmv(adj_t41));
+		pr_debug("t41 - t32 = %" PRId64, tmv_sub(dbl_tmv(adj_t41), tmv_sub(t3, t2)));
+	}
+
 	p->peer_delay = filter_sample(p->delay_filter, pd);
 
 	p->peerMeanPathDelay = tmv_to_TimeInterval(p->peer_delay);
 
-	pr_debug("pdelay %hu   %10" PRId64 "%10" PRId64, portnum(p), p->peer_delay, pd);
-
-	if (p->pod.follow_up_info)
-		port_nrate_calculate(p, t3, t4, tmv_add(c1, c2));
+	pr_debug("pdelay %hu   %" PRId64 " %" PRId64, portnum(p), p->peer_delay, pd);
 
 	if (p->state == PS_UNCALIBRATED || p->state == PS_SLAVE) {
 		clock_peer_delay(p->clock, p->peer_delay, p->nrate.ratio);
 	}
 
+done:
 	msg_put(p->peer_delay_req);
 	p->peer_delay_req = NULL;
 }
