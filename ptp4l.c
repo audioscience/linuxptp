@@ -92,6 +92,7 @@ static struct config cfg_settings = {
 		/* Default to very a large neighborPropDelay threshold */
 		.neighborPropDelayThresh = 20000000,
 		.min_neighbor_prop_delay = -20000000,
+		.foreign_master_threshold = 2,
 	},
 
 	.timestamping = TS_HARDWARE,

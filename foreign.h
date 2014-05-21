@@ -25,8 +25,6 @@
 #include "ds.h"
 #include "port.h"
 
-#define FOREIGN_MASTER_THRESHOLD 2
-
 struct foreign_clock {
 	/**
 	 * Pointer to next foreign_clock in list.

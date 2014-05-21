@@ -131,6 +131,12 @@ static enum parser_result parse_pod_setting(const char *option,
 			return r;
 		pod->min_neighbor_prop_delay = val;
 
+	} else if (!strcmp(option, "foreign_master_threshold")) {
+		r = get_ranged_uint(value, &uval, 1, UINT32_MAX);
+		if (r != PARSED_OK)
+			return r;
+		pod->foreign_master_threshold = uval;
+
 	} else if (!strcmp(option, "fault_badpeernet_interval")) {
 		pod->flt_interval_pertype[FT_BAD_PEER_NETWORK].type = FTMO_LINEAR_SECONDS;
 		if (!strcasecmp("ASAP", value)) {
