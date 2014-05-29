@@ -95,11 +95,18 @@ void clock_destroy(struct clock *c);
 UInteger8 clock_domain_number(struct clock *c);
 
 /**
- * Provide the follow_up info TLV from a slave port.
+ * Update the follow_up info TLV from a slave port.
  * @param c  The clock instance.
  * @param f  Pointer to the TLV.
  */
-void clock_follow_up_info(struct clock *c, struct follow_up_info_tlv *f);
+void clock_update_follow_up_info(struct clock *c, struct follow_up_info_tlv *f);
+
+/**
+ * Set the follow_up info TLV for a slave port.
+ * @param c  The clock instance.
+ * @param f  Pointer to the TLV.
+ */
+void clock_set_follow_up_info(struct clock *c, struct follow_up_info_tlv *f);
 
 /**
  * Obtain the gmCapable flag from a clock's default data set.
