@@ -374,7 +374,7 @@ static void pmc_show(struct ptp_message *msg, FILE *fp)
 			IFMT "master_offset              %" PRId64
 			IFMT "ingress_time               %" PRId64
 			IFMT "cumulativeScaledRateOffset %+.9f"
-			IFMT "scaledLastGmPhaseChange    %d"
+			IFMT "scaledLastGmFreqChange    %d"
 			IFMT "gmTimeBaseIndicator        %hu"
 			IFMT "lastGmPhaseChange          0x%04hx'%016" PRIx64 ".%04hx"
 			IFMT "gmPresent                  %s"
@@ -382,7 +382,7 @@ static void pmc_show(struct ptp_message *msg, FILE *fp)
 			tsn->master_offset,
 			tsn->ingress_time,
 			(tsn->cumulativeScaledRateOffset + 0.0) / P41,
-			tsn->scaledLastGmPhaseChange,
+			tsn->scaledLastGmFreqChange,
 			tsn->gmTimeBaseIndicator,
 			tsn->lastGmPhaseChange.nanoseconds_msb,
 			tsn->lastGmPhaseChange.nanoseconds_lsb,

@@ -224,7 +224,7 @@ static int mgt_post_recv(struct management_tlv *m, uint16_t data_len,
 		tsn->master_offset = net2host64(tsn->master_offset);
 		tsn->ingress_time = net2host64(tsn->ingress_time);
 		tsn->cumulativeScaledRateOffset = ntohl(tsn->cumulativeScaledRateOffset);
-		tsn->scaledLastGmPhaseChange = ntohl(tsn->scaledLastGmPhaseChange);
+		tsn->scaledLastGmFreqChange = ntohl(tsn->scaledLastGmFreqChange);
 		tsn->gmTimeBaseIndicator = ntohs(tsn->gmTimeBaseIndicator);
 		scaled_ns_n2h(&tsn->lastGmPhaseChange);
 		tsn->gmPresent = ntohl(tsn->gmPresent);
@@ -339,7 +339,7 @@ static void mgt_pre_send(struct management_tlv *m, struct tlv_extra *extra)
 		tsn->master_offset = host2net64(tsn->master_offset);
 		tsn->ingress_time = host2net64(tsn->ingress_time);
 		tsn->cumulativeScaledRateOffset = htonl(tsn->cumulativeScaledRateOffset);
-		tsn->scaledLastGmPhaseChange = htonl(tsn->scaledLastGmPhaseChange);
+		tsn->scaledLastGmFreqChange = htonl(tsn->scaledLastGmFreqChange);
 		tsn->gmTimeBaseIndicator = htons(tsn->gmTimeBaseIndicator);
 		scaled_ns_h2n(&tsn->lastGmPhaseChange);
 		tsn->gmPresent = htonl(tsn->gmPresent);
@@ -382,7 +382,7 @@ static int org_post_recv(struct organization_tlv *org)
 			f->cumulativeScaledRateOffset = ntohl(f->cumulativeScaledRateOffset);
 			f->gmTimeBaseIndicator = ntohs(f->gmTimeBaseIndicator);
 			scaled_ns_n2h(&f->lastGmPhaseChange);
-			f->scaledLastGmPhaseChange = ntohl(f->scaledLastGmPhaseChange);
+			f->scaledLastGmFreqChange = ntohl(f->scaledLastGmFreqChange);
 			break;
 		}
 	}
@@ -405,7 +405,7 @@ static void org_pre_send(struct organization_tlv *org)
 			f->cumulativeScaledRateOffset = htonl(f->cumulativeScaledRateOffset);
 			f->gmTimeBaseIndicator = htons(f->gmTimeBaseIndicator);
 			scaled_ns_h2n(&f->lastGmPhaseChange);
-			f->scaledLastGmPhaseChange = htonl(f->scaledLastGmPhaseChange);
+			f->scaledLastGmFreqChange = htonl(f->scaledLastGmFreqChange);
 			break;
 		}
 	}

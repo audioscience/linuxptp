@@ -99,6 +99,7 @@ struct clock {
 	struct filter *delay_filter;
 	struct freq_estimator fest;
 	struct time_status_np status;
+	struct follow_up_info_tlv clksrc_fup_info;
 	double nrr;
 	tmv_t c1;
 	tmv_t c2;
@@ -411,7 +412,7 @@ static int clock_management_fill_response(struct clock *c, struct port *p,
 		tsn->cumulativeScaledRateOffset =
 			(Integer32) (c->status.cumulativeScaledRateOffset +
 				      c->nrr * POW2_41 - POW2_41);
-		tsn->scaledLastGmPhaseChange = c->status.scaledLastGmPhaseChange;
+		tsn->scaledLastGmFreqChange = c->status.scaledLastGmFreqChange;
 		tsn->gmTimeBaseIndicator = c->status.gmTimeBaseIndicator;
 		tsn->lastGmPhaseChange = c->status.lastGmPhaseChange;
 		if (cid_eq(&c->dad.pds.grandmasterIdentity, &c->dds.clockIdentity))
@@ -589,6 +590,9 @@ static enum servo_state clock_no_adjust(struct clock *c)
 	ratio = tmv_dbl(tmv_sub(origin2, f->origin1)) /
 		tmv_dbl(tmv_sub(c->t2, f->ingress1));
 	freq = (1.0 - ratio) * 1e9;
+
+	c->clksrc_fup_info.scaledLastGmFreqChange =
+		(Integer32)((1.0/ratio - 1.0) * POW2_41);
 
 	if (c->stats.max_count > 1) {
 		clock_stats_update(&c->stats,
@@ -770,6 +774,8 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 	c->utc_offset = CURRENT_UTC_OFFSET;
 	c->time_source = dds->time_source;
 	c->desc = dds->clock_desc;
+	memset(&c->status, 0, sizeof(c->status));
+	memset(&c->clksrc_fup_info, 0 , sizeof(c->clksrc_fup_info));
 
 	if (c->free_running) {
 		c->clkid = CLOCK_INVALID;
@@ -920,13 +926,30 @@ UInteger8 clock_domain_number(struct clock *c)
 	return c->dds.domainNumber;
 }
 
-void clock_follow_up_info(struct clock *c, struct follow_up_info_tlv *f)
+void clock_update_follow_up_info(struct clock *c, struct follow_up_info_tlv *f)
 {
 	c->status.cumulativeScaledRateOffset = f->cumulativeScaledRateOffset;
-	c->status.scaledLastGmPhaseChange = f->scaledLastGmPhaseChange;
+	c->status.scaledLastGmFreqChange = f->scaledLastGmFreqChange;
 	c->status.gmTimeBaseIndicator = f->gmTimeBaseIndicator;
-	memcpy(&c->status.lastGmPhaseChange, &f->lastGmPhaseChange,
-	       sizeof(c->status.lastGmPhaseChange));
+	c->status.lastGmPhaseChange = f->lastGmPhaseChange;
+}
+
+void clock_set_follow_up_info(struct clock *c, struct follow_up_info_tlv *f)
+{
+	/* Are we the grandmaster? */
+	if (cid_eq(&c->dad.pds.grandmasterIdentity, &c->dds.clockIdentity)) {
+		f->cumulativeScaledRateOffset = 0;
+		f->gmTimeBaseIndicator = c->clksrc_fup_info.gmTimeBaseIndicator;
+		f->lastGmPhaseChange = c->clksrc_fup_info.lastGmPhaseChange;
+		f->scaledLastGmFreqChange = c->clksrc_fup_info.scaledLastGmFreqChange;
+	} else {
+		f->cumulativeScaledRateOffset =
+			(Integer32)(c->status.cumulativeScaledRateOffset +
+						c->nrr * POW2_41 - POW2_41);
+		f->gmTimeBaseIndicator = c->status.gmTimeBaseIndicator;
+		f->lastGmPhaseChange = c->status.lastGmPhaseChange;
+		f->scaledLastGmFreqChange = c->status.scaledLastGmFreqChange;
+	}
 }
 
 int clock_gm_capable(struct clock *c)
@@ -1311,6 +1334,9 @@ enum servo_state clock_synchronize(struct clock *c,
 	if (clock_utc_correct(c, ingress))
 		return c->servo_state;
 
+	c->clksrc_fup_info.lastGmPhaseChange.nanoseconds_msb = 0;
+	c->clksrc_fup_info.lastGmPhaseChange.nanoseconds_lsb = c->master_offset;
+	c->clksrc_fup_info.lastGmPhaseChange.fractional_nanoseconds = 0;
 	c->cur.offsetFromMaster = tmv_to_TimeInterval(c->master_offset);
 
 	if (c->free_running)

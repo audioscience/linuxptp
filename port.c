@@ -363,6 +363,7 @@ static int follow_up_info_append(struct port *p, struct ptp_message *m)
 	memcpy(fui->id, ieee8021_id, sizeof(ieee8021_id));
 	fui->subtype[2] = 1;
 	m->tlv_count = 1;
+	clock_set_follow_up_info(p->clock, fui);
 	return sizeof(*fui);
 }
 
@@ -1616,7 +1617,7 @@ static void process_follow_up(struct port *p, struct ptp_message *m)
 		struct follow_up_info_tlv *fui = follow_up_info_extract(m);
 		if (!fui)
 			return;
-		clock_follow_up_info(p->clock, fui);
+		clock_update_follow_up_info(p->clock, fui);
 	}
 
 	if (p->syfu == SF_HAVE_SYNC &&
