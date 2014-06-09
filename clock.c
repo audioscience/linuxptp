@@ -407,18 +407,26 @@ static int clock_management_fill_response(struct clock *c, struct port *p,
 		break;
 	case TIME_STATUS_NP:
 		tsn = (struct time_status_np *) tlv->data;
-		tsn->master_offset = c->master_offset;
-		tsn->ingress_time = tmv_to_nanoseconds(c->t2);
-		tsn->cumulativeScaledRateOffset =
-			(Integer32) (c->status.cumulativeScaledRateOffset +
-				      c->nrr * POW2_41 - POW2_41);
-		tsn->scaledLastGmFreqChange = c->status.scaledLastGmFreqChange;
-		tsn->gmTimeBaseIndicator = c->status.gmTimeBaseIndicator;
-		tsn->lastGmPhaseChange = c->status.lastGmPhaseChange;
-		if (cid_eq(&c->dad.pds.grandmasterIdentity, &c->dds.clockIdentity))
+		/* Are we the grandmaster? */
+		if (cid_eq(&c->dad.pds.grandmasterIdentity, &c->dds.clockIdentity)) {
+			tsn->master_offset = 0;
+			tsn->ingress_time = 0;
+			tsn->cumulativeScaledRateOffset = 0;
+			tsn->gmTimeBaseIndicator = c->clksrc_fup_info.gmTimeBaseIndicator;
+			tsn->lastGmPhaseChange = c->clksrc_fup_info.lastGmPhaseChange;
+			tsn->scaledLastGmFreqChange = c->clksrc_fup_info.scaledLastGmFreqChange;
 			tsn->gmPresent = 0;
-		else
+		} else {
+			tsn->master_offset = c->master_offset;
+			tsn->ingress_time = tmv_to_nanoseconds(c->t2);
+			tsn->cumulativeScaledRateOffset =
+				(Integer32) (c->status.cumulativeScaledRateOffset +
+						  c->nrr * POW2_41 - POW2_41);
+			tsn->scaledLastGmFreqChange = c->status.scaledLastGmFreqChange;
+			tsn->gmTimeBaseIndicator = c->status.gmTimeBaseIndicator;
+			tsn->lastGmPhaseChange = c->status.lastGmPhaseChange;
 			tsn->gmPresent = 1;
+		}
 		tsn->gmIdentity = c->dad.pds.grandmasterIdentity;
 		datalen = sizeof(*tsn);
 		respond = 1;
@@ -1446,6 +1454,7 @@ static void handle_state_decision_event(struct clock *c)
 		c->t2 = tmv_zero();
 		c->path_delay = 0;
 		c->nrr = 1.0;
+		c->master_offset = 0;
 		fresh_best = 1;
 	}
 
