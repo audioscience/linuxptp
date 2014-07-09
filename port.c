@@ -2046,6 +2046,7 @@ static void port_p2p_transition(struct port *p, enum port_state next)
 		/* fall through */
 	case PS_SLAVE:
 		port_set_announce_tmo(p);
+		port_set_sync_rx_tmo(p);
 		break;
 	};
 }
