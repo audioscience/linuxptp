@@ -633,6 +633,9 @@ static void clock_update_grandmaster(struct clock *c)
 	struct parentDS *pds = &c->dad.pds;
 	memset(&c->cur, 0, sizeof(c->cur));
 	memset(c->ptl, 0, sizeof(c->ptl));
+	if (!cid_eq(&pds->grandmasterIdentity, &c->dds.clockIdentity))
+		c->clksrc_fup_info.gmTimeBaseIndicator++;
+
 	pds->parentPortIdentity.clockIdentity   = c->dds.clockIdentity;
 	pds->parentPortIdentity.portNumber      = 0;
 	pds->grandmasterIdentity                = c->dds.clockIdentity;
