@@ -925,7 +925,7 @@ static int port_set_qualification_tmo(struct port *p)
 static int port_set_sync_rx_tmo(struct port *p)
 {
 	return set_tmo_log(p->fda.fd[FD_SYNC_RX_TIMER],
-			   p->syncReceiptTimeout, p->logSyncInterval);
+			   p->syncReceiptTimeout, p->log_sync_interval);
 }
 
 static int port_set_sync_tx_tmo(struct port *p)
@@ -1386,6 +1386,7 @@ static int port_initialize(struct port *p)
 	p->syncReceiptTimeout      = p->pod.syncReceiptTimeout;
 	p->transportSpecific       = p->pod.transportSpecific;
 	p->logSyncInterval         = p->pod.logSyncInterval;
+	p->log_sync_interval       = p->pod.logSyncInterval;
 	p->logMinPdelayReqInterval = p->pod.logMinPdelayReqInterval;
 	p->neighborPropDelayThresh = p->pod.neighborPropDelayThresh;
 	p->min_neighbor_prop_delay = p->pod.min_neighbor_prop_delay;
