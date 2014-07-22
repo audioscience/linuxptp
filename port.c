@@ -895,9 +895,14 @@ static void port_nrate_initialize(struct port *p)
 
 static int port_set_announce_tmo(struct port *p)
 {
-	return set_tmo_random(p->fda.fd[FD_ANNOUNCE_TIMER],
+	if (p->delayMechanism == DM_P2P) {
+		return set_tmo_log(p->fda.fd[FD_ANNOUNCE_TIMER],
+			       p->announceReceiptTimeout, p->logAnnounceInterval);
+	} else {
+		return set_tmo_random(p->fda.fd[FD_ANNOUNCE_TIMER],
 			      p->announceReceiptTimeout,
 			      p->pod.announce_span, p->logAnnounceInterval);
+	}
 }
 
 static int port_set_delay_tmo(struct port *p)
