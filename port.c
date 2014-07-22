@@ -326,7 +326,9 @@ static int add_foreign_master(struct port *p, struct ptp_message *m)
 		fc->port = p;
 		fc->dataset.sender = m->header.sourcePortIdentity;
 		/* We do not count this first message, see 9.5.3(b) */
-		return 0;
+		/* but add 802.1AS exception */
+		if (p->foreign_master_threshold != 1)
+			return 0;
 	}
 
 	/*
