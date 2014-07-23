@@ -326,7 +326,9 @@ static int add_foreign_master(struct port *p, struct ptp_message *m)
 		fc->port = p;
 		fc->dataset.sender = m->header.sourcePortIdentity;
 		/* We do not count this first message, see 9.5.3(b) */
-		return 0;
+		/* but add 802.1AS exception */
+		if (p->foreign_master_threshold != 1)
+			return 0;
 	}
 
 	/*
@@ -895,9 +897,14 @@ static void port_nrate_initialize(struct port *p)
 
 static int port_set_announce_tmo(struct port *p)
 {
-	return set_tmo_random(p->fda.fd[FD_ANNOUNCE_TIMER],
+	if (p->delayMechanism == DM_P2P) {
+		return set_tmo_log(p->fda.fd[FD_ANNOUNCE_TIMER],
+			       p->announceReceiptTimeout, p->logAnnounceInterval);
+	} else {
+		return set_tmo_random(p->fda.fd[FD_ANNOUNCE_TIMER],
 			      p->announceReceiptTimeout,
 			      p->pod.announce_span, p->logAnnounceInterval);
+	}
 }
 
 static int port_set_delay_tmo(struct port *p)
@@ -925,7 +932,7 @@ static int port_set_qualification_tmo(struct port *p)
 static int port_set_sync_rx_tmo(struct port *p)
 {
 	return set_tmo_log(p->fda.fd[FD_SYNC_RX_TIMER],
-			   p->syncReceiptTimeout, p->logSyncInterval);
+			   p->syncReceiptTimeout, p->log_sync_interval);
 }
 
 static int port_set_sync_tx_tmo(struct port *p)
@@ -1386,6 +1393,7 @@ static int port_initialize(struct port *p)
 	p->syncReceiptTimeout      = p->pod.syncReceiptTimeout;
 	p->transportSpecific       = p->pod.transportSpecific;
 	p->logSyncInterval         = p->pod.logSyncInterval;
+	p->log_sync_interval       = p->pod.logSyncInterval;
 	p->logMinPdelayReqInterval = p->pod.logMinPdelayReqInterval;
 	p->neighborPropDelayThresh = p->pod.neighborPropDelayThresh;
 	p->min_neighbor_prop_delay = p->pod.min_neighbor_prop_delay;
