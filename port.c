@@ -117,6 +117,7 @@ struct port {
 static int port_capable(struct port *p);
 static int port_is_ieee8021as(struct port *p);
 static void port_nrate_initialize(struct port *p);
+static void port_p2p_transition(struct port *p, enum port_state next);
 
 static int announce_compare(struct ptp_message *m1, struct ptp_message *m2)
 {
@@ -520,8 +521,14 @@ static int port_capable(struct port *p)
 	}
 
 capable:
-	if (!p->asCapable)
+	if (!p->asCapable) {
 		pr_debug("port %hu: setting asCapable", portnum(p));
+		/* we may have become master while asCapable == 0,
+		 * when asCapable changes to 1 we want to send an announce
+		 * as soon as possible.
+		 */
+		port_p2p_transition(p, p->state);
+	}
 	p->asCapable = 1;
 	return 1;
 
