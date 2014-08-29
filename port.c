@@ -1088,6 +1088,7 @@ static int port_pdelay_request(struct port *p)
 {
 	struct ptp_message *msg;
 	int err;
+	struct timePropertiesDS *tp = clock_time_properties(p->clock);
 
 	/* If multiple pdelay resp were not detected the counter can be reset */
 	if (!p->multiple_pdr_detected) {
@@ -1112,6 +1113,8 @@ static int port_pdelay_request(struct port *p)
 	msg->header.control            = CTL_OTHER;
 	msg->header.logMessageInterval = port_is_ieee8021as(p) ?
 		p->logMinPdelayReqInterval : 0x7f;
+
+	msg->header.flagField[1] = tp->flags;
 
 	err = port_prepare_and_send(p, msg, 1);
 	if (err) {
@@ -1239,6 +1242,7 @@ static int port_tx_sync(struct port *p)
 	struct ptp_message *msg, *fup;
 	int err, pdulen;
 	int event = p->timestamping == TS_ONESTEP ? TRANS_ONESTEP : TRANS_EVENT;
+	struct timePropertiesDS *tp = clock_time_properties(p->clock);
 
 	if (!port_capable(p)) {
 		return 0;
@@ -1266,6 +1270,8 @@ static int port_tx_sync(struct port *p)
 	msg->header.sequenceId         = p->seqnum.sync++;
 	msg->header.control            = CTL_SYNC;
 	msg->header.logMessageInterval = p->logSyncInterval;
+
+	msg->header.flagField[1] = tp->flags;
 
 	if (p->timestamping != TS_ONESTEP)
 		msg->header.flagField[0] |= TWO_STEP;
@@ -1300,6 +1306,8 @@ static int port_tx_sync(struct port *p)
 	fup->header.sequenceId         = p->seqnum.sync - 1;
 	fup->header.control            = CTL_FOLLOW_UP;
 	fup->header.logMessageInterval = p->logSyncInterval;
+
+	fup->header.flagField[1] = tp->flags;
 
 	ts_to_timestamp(&msg->hwts.ts, &fup->follow_up.preciseOriginTimestamp);
 
@@ -1648,6 +1656,7 @@ static int process_pdelay_req(struct port *p, struct ptp_message *m)
 {
 	struct ptp_message *rsp, *fup;
 	int err;
+	struct timePropertiesDS *tp = clock_time_properties(p->clock);
 
 	if (p->delayMechanism == DM_E2E) {
 		pr_warning("port %hu: pdelay_req on E2E port", portnum(p));
@@ -1698,7 +1707,7 @@ static int process_pdelay_req(struct port *p, struct ptp_message *m)
 	 * so we always send a follow up message.
 	 */
 	rsp->header.flagField[0] |= TWO_STEP;
-
+	rsp->header.flagField[1] = tp->flags;
 	/*
 	 * NB - We do not have any fraction nanoseconds for the correction
 	 * fields, neither in the response or the follow up.
@@ -1718,6 +1727,7 @@ static int process_pdelay_req(struct port *p, struct ptp_message *m)
 	fup->header.control            = CTL_OTHER;
 	fup->header.logMessageInterval = 0x7f;
 
+	fup->header.flagField[1] = tp->flags;
 	fup->pdelay_resp_fup.requestingPortIdentity = m->header.sourcePortIdentity;
 
 	err = port_prepare_and_send(p, rsp, 1);
