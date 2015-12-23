@@ -67,6 +67,7 @@ struct port {
 	struct fdarray fda;
 	struct foreign_clock *best;
 	enum syfu_state syfu;
+	UInteger16 last_qualified_rx_announce_seqnum;
 	struct ptp_message *last_syncfup;
 	struct ptp_message *delay_req;
 	struct ptp_message *peer_delay_req;
@@ -1519,8 +1520,12 @@ static int process_announce(struct port *p, struct ptp_message *m)
 	/* Do not qualify announce messages with stepsRemoved >= 255, see
 	 * IEEE1588-2008 section 9.3.2.5 (d)
 	 */
-	if (m->announce.stepsRemoved >= 255)
+	if (m->announce.stepsRemoved >= 255) {
+		pr_err("Announce seq %hu, not qualified: stepsRemoved >= 255", m->header.sequenceId);
 		return result;
+	}
+
+	p->last_qualified_rx_announce_seqnum = m->header.sequenceId;
 
 	switch (p->state) {
 	case PS_INITIALIZING:
@@ -2140,8 +2145,15 @@ enum fsm_event port_event(struct port *p, int fd_index)
 	switch (fd_index) {
 	case FD_ANNOUNCE_TIMER:
 	case FD_SYNC_RX_TIMER:
-		pr_debug("port %hu: %s timeout", portnum(p),
-			 fd_index == FD_SYNC_RX_TIMER ? "rx sync" : "announce");
+		{
+			const char *msg_type = fd_index == FD_SYNC_RX_TIMER ? "rx sync" :
+				"announce";
+			const UInteger16 seq_num = fd_index == FD_SYNC_RX_TIMER ?
+				p->last_syncfup->header.sequenceId :
+				p->last_qualified_rx_announce_seqnum;
+			pr_err("port %hu: %s timeout. Last seq num %hu", portnum(p),
+				msg_type, seq_num);
+		}
 		if (p->best)
 			fc_clear(p->best);
 		port_set_announce_tmo(p);
