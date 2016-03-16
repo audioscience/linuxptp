@@ -68,6 +68,7 @@ struct port {
 	struct foreign_clock *best;
 	enum syfu_state syfu;
 	UInteger16 last_qualified_rx_announce_seqnum;
+	UInteger16 last_rx_sync_seqnum;
 	struct ptp_message *last_syncfup;
 	struct ptp_message *delay_req;
 	struct ptp_message *peer_delay_req;
@@ -1010,6 +1011,7 @@ static void port_syfufsm(struct port *p, enum syfu_event event,
 			 struct ptp_message *m)
 {
 	struct ptp_message *syn, *fup;
+	p->last_rx_sync_seqnum = m->header.sequenceId;
 
 	switch (p->syfu) {
 	case SF_EMPTY:
@@ -2149,7 +2151,7 @@ enum fsm_event port_event(struct port *p, int fd_index)
 			const char *msg_type = fd_index == FD_SYNC_RX_TIMER ? "rx sync" :
 				"announce";
 			const UInteger16 seq_num = fd_index == FD_SYNC_RX_TIMER ?
-				p->last_syncfup->header.sequenceId :
+				p->last_rx_sync_seqnum :
 				p->last_qualified_rx_announce_seqnum;
 			pr_err("port %hu: %s timeout. Last seq num %hu", portnum(p),
 				msg_type, seq_num);
