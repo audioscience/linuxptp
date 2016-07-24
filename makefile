@@ -27,7 +27,7 @@ OBJ     = bmc.o clock.o clockadj.o clockcheck.o config.o fault.o \
  filter.o fsm.o linreg.o mave.o mmedian.o msg.o phc.o pi.o port.o print.o raw.o \
  servo.o sk.o stats.o tlv.o transport.o udp.o udp6.o uds.o util.o version.o
 
-OBJECTS	= $(OBJ) hwstamp_ctl.o phc2sys.o pmc.o pmc_common.o sysoff.o
+OBJECTS	= $(OBJ) hwstamp_ctl.o phc2sys.o pmc.o pmc_common.o sysoff.o ptp4l.o libmain.o
 SRC	= $(OBJECTS:.o=.c)
 DEPEND	= $(OBJECTS:.o=.d)
 srcdir	:= $(dir $(lastword $(MAKEFILE_LIST)))
@@ -40,7 +40,10 @@ sbindir	= $(prefix)/sbin
 mandir	= $(prefix)/man
 man8dir	= $(mandir)/man8
 
-all: $(PRG)
+all: $(PRG) ptp4l.so
+
+ptp4l.so: $(OBJ) libmain.o
+	$(CC) --shared $^ -o $@
 
 ptp4l: $(OBJ) ptp4l.o
 
