@@ -447,14 +447,11 @@ static int path_trace_ignore(struct port *p, struct ptp_message *m)
 	struct path_trace_tlv *ptt;
 	int i, cnt;
 
-	if (!p->pod.path_trace_enabled) {
-		return 0;
-	}
 	if (msg_type(m) != ANNOUNCE) {
 		return 0;
 	}
-	if (m->tlv_count != 1) {
-		return 1;
+	if (m->tlv_count == 0) {
+		return 0;
 	}
 	ptt = (struct path_trace_tlv *) m->announce.suffix;
 	if (ptt->type != TLV_PATH_TRACE) {
@@ -1487,11 +1484,13 @@ static int update_current_master(struct port *p, struct ptp_message *m)
 		tds.timeSource = m->announce.timeSource;
 		clock_update_time_properties(p->clock, tds);
 	}
-	if (p->pod.path_trace_enabled) {
+	if (p->pod.path_trace_enabled && m->tlv_count != 0) {
 		ptt = (struct path_trace_tlv *) m->announce.suffix;
-		dad = clock_parent_ds(p->clock);
-		memcpy(dad->ptl, ptt->cid, ptt->length);
-		dad->path_length = path_length(ptt);
+		if (ptt->type == TLV_PATH_TRACE) {
+			dad = clock_parent_ds(p->clock);
+			memcpy(dad->ptl, ptt->cid, ptt->length);
+			dad->path_length = path_length(ptt);
+		}
 	}
 	port_set_announce_tmo(p);
 	fc_prune(fc, p->foreign_master_threshold);
