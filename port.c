@@ -116,6 +116,7 @@ struct port {
 
 #define NSEC2SEC 1000000000LL
 
+static int port_is_enabled(struct port *p);
 static int port_capable(struct port *p);
 static int port_is_ieee8021as(struct port *p);
 static void port_nrate_initialize(struct port *p);
@@ -468,73 +469,123 @@ static int path_trace_ignore(struct port *p, struct ptp_message *m)
 
 static int port_capable(struct port *p)
 {
+	struct port_capable_info info;
+
 	if (!port_is_ieee8021as(p)) {
 		/* Normal 1588 ports are always capable. */
 		goto capable;
 	}
 
-	if (tmv_to_nanoseconds(p->peer_delay) >	p->neighborPropDelayThresh) {
-		if (p->asCapable)
-			pr_debug("port %hu: peer_delay (%" PRId64 ") > neighborPropDelayThresh "
-				"(%" PRId32 "), resetting asCapable", portnum(p),
-				tmv_to_nanoseconds(p->peer_delay),
-				p->neighborPropDelayThresh);
-		goto not_capable;
+	port_capable_info(p, &info);
+	if (info.as_capable) {
+		goto capable;
 	}
 
-	if (tmv_to_nanoseconds(p->peer_delay) <	p->min_neighbor_prop_delay) {
-		if (p->asCapable)
-			pr_debug("port %hu: peer_delay (%" PRId64 ") < min_neighbor_prop_delay "
-				"(%" PRId32 "), resetting asCapable", portnum(p),
-				tmv_to_nanoseconds(p->peer_delay),
-				p->min_neighbor_prop_delay);
-		goto not_capable;
+	if (p->asCapable != 0) {
+		port_nrate_initialize(p);
+		clock_call_port_update_cb(p->clock, &info);
 	}
-
-	if (p->pdr_missing > ALLOWED_LOST_RESPONSES) {
-		if (p->asCapable)
-			pr_debug("port %hu: missed %d peer delay resp, "
-				"resetting asCapable", portnum(p), p->pdr_missing);
-		goto not_capable;
-	}
-
-	if (p->multiple_seq_pdr_count > ALLOWED_LOST_RESPONSES) {
-		if (p->asCapable)
-			pr_debug("port %hu: multiple sequential peer delay resp, "
-				"resetting asCapable", portnum(p));
-		goto not_capable;
-	}
-
-	if (!p->peer_portid_valid) {
-		if (p->asCapable)
-			pr_debug("port %hu: invalid peer port id, "
-				"resetting asCapable", portnum(p));
-		goto not_capable;
-	}
-
-	if (!p->nrate.ratio_valid) {
-		if (p->asCapable)
-			pr_debug("port %hu: invalid nrate, "
-				"resetting asCapable", portnum(p));
-		goto not_capable;
-	}
+	p->asCapable = 0;
+	return 0;
 
 capable:
-	if (!p->asCapable) {
+	if (p->asCapable != 1) {
 		pr_debug("port %hu: setting asCapable", portnum(p));
 		/* we may have become master while asCapable == 0,
 		 * when asCapable changes to 1 we want to send an announce
 		 * as soon as possible.
 		 */
 		port_p2p_transition(p, p->state);
+		clock_call_port_update_cb(p->clock, &info);
 	}
 	p->asCapable = 1;
 	return 1;
+}
 
-not_capable:
-	if (p->asCapable)
-		port_nrate_initialize(p);
-	p->asCapable = 0;
+int port_capable_info(struct port *p, struct port_capable_info *info)
+{
+	int not_capable = 0;
+
+	memset(info, 0, sizeof(*info));
+	info->port_num = portnum(p);
+
+	info->port_state_acceptable.actual = port_is_enabled(p);
+	info->port_state_acceptable.expected = 1;
+	if (!port_is_enabled(p)) {
+		if (p->asCapable)
+			pr_debug("port %hu: port state %d not acceptable, resetting asCapable",
+				portnum(p), port_state(p));
+		info->port_state_acceptable.unmet = 1;
+		not_capable = 1;
+	}
+
+	info->max_peer_delay.actual = tmv_to_nanoseconds(p->peer_delay);
+	info->max_peer_delay.expected = p->neighborPropDelayThresh;
+	if (tmv_to_nanoseconds(p->peer_delay) >	p->neighborPropDelayThresh) {
+		if (p->asCapable)
+			pr_debug("port %hu: peer_delay (%" PRId64 ") > neighborPropDelayThresh "
+				"(%" PRId32 "), resetting asCapable", portnum(p),
+				tmv_to_nanoseconds(p->peer_delay),
+				p->neighborPropDelayThresh);
+		info->max_peer_delay.unmet = 1;
+		not_capable = 1;
+	}
+
+	info->min_peer_delay.actual = tmv_to_nanoseconds(p->peer_delay);
+	info->min_peer_delay.expected = p->min_neighbor_prop_delay;
+	if (tmv_to_nanoseconds(p->peer_delay) <	p->min_neighbor_prop_delay) {
+		if (p->asCapable)
+			pr_debug("port %hu: peer_delay (%" PRId64 ") < min_neighbor_prop_delay "
+				"(%" PRId32 "), resetting asCapable", portnum(p),
+				tmv_to_nanoseconds(p->peer_delay),
+				p->min_neighbor_prop_delay);
+		info->min_peer_delay.unmet = 1;
+		not_capable = 1;
+	}
+
+	info->max_missed_pdr.actual = p->pdr_missing;
+	info->max_missed_pdr.expected = ALLOWED_LOST_RESPONSES;
+	if (p->pdr_missing > ALLOWED_LOST_RESPONSES) {
+		if (p->asCapable)
+			pr_debug("port %hu: missed %d peer delay resp, "
+				"resetting asCapable", portnum(p), p->pdr_missing);
+		info->max_missed_pdr.unmet = 1;
+		not_capable = 1;
+	}
+
+	info->max_multiple_seq_pdr.actual = p->multiple_seq_pdr_count;
+	info->max_multiple_seq_pdr.expected = ALLOWED_LOST_RESPONSES;
+	if (p->multiple_seq_pdr_count > ALLOWED_LOST_RESPONSES) {
+		if (p->asCapable)
+			pr_debug("port %hu: multiple sequential peer delay resp, "
+				"resetting asCapable", portnum(p));
+		info->max_multiple_seq_pdr.unmet = 1;
+		not_capable = 1;
+	}
+
+	info->peer_port_id_valid.actual = p->peer_portid_valid;
+	info->peer_port_id_valid.expected = 1;
+	if (!p->peer_portid_valid) {
+		if (p->asCapable)
+			pr_debug("port %hu: invalid peer port id, "
+				"resetting asCapable", portnum(p));
+		info->peer_port_id_valid.unmet = 1;
+		not_capable = 1;
+	}
+
+	info->nrate_ratio_valid.actual = p->nrate.ratio_valid;
+	info->nrate_ratio_valid.expected = 1;
+	if (!p->nrate.ratio_valid) {
+		if (p->asCapable)
+			pr_debug("port %hu: invalid nrate, "
+				"resetting asCapable", portnum(p));
+		info->nrate_ratio_valid.unmet = 1;
+		not_capable = 1;
+	}
+
+	if (!not_capable)
+		info->as_capable = 1;
+
 	return 0;
 }
 
@@ -886,8 +937,6 @@ static void port_nrate_initialize(struct port *p)
 
 	/* We start in the 'incapable' state. */
 	p->pdr_missing = ALLOWED_LOST_RESPONSES + 1;
-	p->asCapable = 0;
-
 	p->peer_portid_valid = 0;
 
 	p->nrate.origin1 = tmv_zero();
@@ -2117,6 +2166,7 @@ int port_dispatch(struct port *p, enum fsm_event event, int mdiff)
 		if (next == PS_LISTENING && p->delayMechanism == DM_P2P) {
 			port_set_delay_tmo(p);
 		}
+		port_capable(p);
 		port_notify_event(p, NOTIFY_PORT_STATE);
 		return 1;
 	}
@@ -2133,6 +2183,7 @@ int port_dispatch(struct port *p, enum fsm_event event, int mdiff)
 	}
 
 	p->state = next;
+	port_capable(p);
 	port_notify_event(p, NOTIFY_PORT_STATE);
 	return 0;
 }
@@ -2509,6 +2560,7 @@ struct port *port_open(int phc_index,
 		return NULL;
 	}
 	p->nrate.ratio = 1.0;
+	p->asCapable = -1;
 	return p;
 }
 

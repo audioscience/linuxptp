@@ -111,9 +111,37 @@ struct clock {
 	struct clockcheck *sanity_check;
 	struct interface uds_interface;
 	LIST_HEAD(clock_subscribers_head, clock_subscriber) subscribers;
+	port_update_cb_t port_update_cb;
+	void *port_update_cb_priv;
 };
 
 struct clock the_clock;
+
+int clock_register_port_update_cb(struct clock *c, port_update_cb_t cb, void *priv)
+{
+	c->port_update_cb = cb;
+	c->port_update_cb_priv = priv;
+	/* if the callback is being registered, call it for each port with current info */
+	if (c->port_update_cb) {
+		int i;
+		struct port_capable_info info;
+		for (i=0; i<CLK_N_PORTS; i++) {
+			if (!c->port[i])
+				continue;
+			port_capable_info(c->port[i], &info);
+			clock_call_port_update_cb(c, &info);
+		}
+	}
+	return 0;
+}
+
+int clock_call_port_update_cb(struct clock *c, struct port_capable_info *info)
+{
+	if (!c->port_update_cb)
+		return 0;
+	c->port_update_cb(info, c->port_update_cb_priv);
+	return 0;
+}
 
 static void handle_state_decision_event(struct clock *c);
 
@@ -778,6 +806,7 @@ struct clock *clock_create(int phc_index, struct interface *iface, int count,
 	udsif->transport = TRANS_UDS;
 	udsif->delay_filter_length = 1;
 
+	c->port_update_cb = NULL;
 	c->free_running = dds->free_running;
 	c->freq_est_interval = dds->freq_est_interval;
 	c->grand_master_capable = dds->grand_master_capable;
