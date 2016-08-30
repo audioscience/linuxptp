@@ -264,4 +264,6 @@ enum fault_type last_fault_type(struct port *port);
 int fault_interval(struct port *port, enum fault_type ft,
 	struct fault_interval *i);
 
+struct port_capable_info;
+int port_capable_info(struct port *p, struct port_capable_info *info);
 #endif
