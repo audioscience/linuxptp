@@ -286,4 +286,49 @@ void clock_check_ts(struct clock *c, struct timespec ts);
  */
 double clock_rate_ratio(struct clock *c);
 
+struct port_capable_info {
+	int port_num;
+	int as_capable;
+	struct max_peer_delay {
+		int64_t actual;
+		int64_t expected;
+		uint8_t unmet;
+	} max_peer_delay;
+	struct min_peer_delay {
+		int64_t actual;
+		int64_t expected;
+		uint8_t unmet;
+	} min_peer_delay;
+	struct max_missed_pdr {
+		uint8_t actual;
+		uint8_t expected;
+		uint8_t unmet;
+	} max_missed_pdr;
+	struct max_multiple_seq_pdr {
+		uint8_t actual;
+		uint8_t expected;
+		uint8_t unmet;
+	} max_multiple_seq_pdr;
+	struct peer_port_id_valid {
+		uint8_t actual;
+		uint8_t expected;
+		uint8_t unmet;
+	} peer_port_id_valid;
+	struct nrate_ratio_valid {
+		uint8_t actual;
+		uint8_t expected;
+		uint8_t unmet;
+	} nrate_ratio_valid;
+	struct port_state_acceptable {
+		uint8_t actual;
+		uint8_t expected;
+		uint8_t unmet;
+	} port_state_acceptable;
+};
+
+typedef void (*port_update_cb_t)(struct port_capable_info *info, void *priv);
+
+int clock_register_port_update_cb(struct clock *c, port_update_cb_t cb, void *priv);
+int clock_call_port_update_cb(struct clock *c, struct port_capable_info *info);
+
 #endif
