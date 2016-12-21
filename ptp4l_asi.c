@@ -5,6 +5,7 @@
 
 #include "libmain.h"
 #include "clock.h"
+#include "util.h"
 
 #include <libubus.h>
 
@@ -29,6 +30,7 @@ void ubus_connection_lost(struct ubus_context *ctx)
 {
 	ctx->sock.fd = -1;
 	clock_register_port_update_cb(s.c, NULL, NULL);
+	clock_register_clock_update_cb(s.c, NULL, NULL);
 	fprintf(stderr, "Disconnected from ubusd\n");
 }
 
@@ -63,7 +65,7 @@ struct blob_attr *as_info_payload(struct port_capable_info *info)
 	return blob_data(b.head);
 }
 
-int ubus_method_handler(struct ubus_context *ctx, struct ubus_object *obj,
+int ascapable_ubus_method_handler(struct ubus_context *ctx, struct ubus_object *obj,
 			      struct ubus_request_data *req,
 			      const char *method, struct blob_attr *msg)
 {
@@ -75,6 +77,46 @@ int ubus_method_handler(struct ubus_context *ctx, struct ubus_object *obj,
 	struct blob_attr *payload = as_info_payload(info);
 	ubus_send_reply(ctx, req, payload);
 	return 0;
+}
+
+struct blob_attr *parent_ds_payload(struct parentDS *pds)
+{
+	struct timespec ts;
+	char *msg = NULL;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	uint64_t ns = ((uint64_t)ts.tv_sec)*NS_PER_SEC+ts.tv_nsec;
+	blob_buf_init(&b, 0);
+	asprintf(&msg, "{\"tm\":%llu,\"parent-clock-identity\":\"%s\"}",
+		ns, cid2str(&pds->grandmasterIdentity));
+	blob_put(&b, BLOB_ATTR_STRING, msg, strlen(msg)-1);
+	free(msg);
+	return blob_data(b.head);
+}
+
+int parentds_ubus_method_handler(struct ubus_context *ctx, struct ubus_object *obj,
+			      struct ubus_request_data *req,
+			      const char *method, struct blob_attr *msg)
+{
+	uint8_t null_clk[] = {0,0,0,0,0,0,0,0};
+	struct pub_obj *p = container_of(obj, struct pub_obj, obj);
+	struct clock *c = (struct clock *)p->priv;
+	struct parentDS *pds = &clock_parent_ds(c)->pds;
+	if (!memcmp(&null_clk, &pds->grandmasterIdentity, sizeof(pds->grandmasterIdentity)))
+		return UBUS_STATUS_NO_DATA;
+	struct blob_attr *payload = parent_ds_payload(pds);
+	ubus_send_reply(ctx, req, payload);
+	return 0;
+}
+
+void clock_update_cb(int data_id, int ev_id, void *buf, size_t buf_len, void *priv)
+{
+	if (!buf || data_id != PARENT_DATA_SET)
+		return;
+	assert(s.ubus_ctx);
+	assert(s.ubus_ctx->sock.fd >= 0);
+	struct parentDS *pds = (struct parentDS *)buf;
+	struct blob_attr *payload = parent_ds_payload(pds);
+	ubus_notify(s.ubus_ctx, &s.objs[s.num_obj-1].obj, "update", payload, -1);
 }
 
 void port_update_cb(struct port_capable_info *info, void *priv)
@@ -92,9 +134,10 @@ void setup_ubus_objects(void)
 {
 	int idx;
 
-	s.num_obj = clock_num_ports(s.c);
+	int num_ports = clock_num_ports(s.c);
+	s.num_obj = num_ports+1;
 	s.objs = calloc(sizeof(struct pub_obj), s.num_obj);
-	for (idx = 0; idx < s.num_obj; idx++) {
+	for (idx = 0; idx < num_ports; idx++) {
 		struct ubus_object *o = &s.objs[idx].obj;
 		struct ubus_method *m = s.objs[idx].methods;
 		struct ubus_object_type *t = &s.objs[idx].type;
@@ -104,7 +147,7 @@ void setup_ubus_objects(void)
 		o->name = name;
 		o->type = t;
 		m[0].name = NULL;
-		m[0].handler = ubus_method_handler;
+		m[0].handler = ascapable_ubus_method_handler;
 		m[1].name = "*";
 		m[1].handler = NULL;
 		o->n_methods = 1;
@@ -114,6 +157,30 @@ void setup_ubus_objects(void)
 		int ret = ubus_add_object(s.ubus_ctx, o);
 		if (ret) {
 			fprintf(stderr, "Cannot add object for port %d, error %d\n", idx, ret);
+			exit(1);
+		}
+	}
+	{
+		idx = s.num_obj-1;
+		struct ubus_object *o = &s.objs[idx].obj;
+		struct ubus_method *m = s.objs[idx].methods;
+		struct ubus_object_type *t = &s.objs[idx].type;
+		char *name = NULL;
+		asprintf(&name, "0:vol-st/avb/gptp/parent-ds");
+		s.objs[idx].priv = (void*)s.c;
+		o->name = name;
+		o->type = t;
+		m[0].name = NULL;
+		m[0].handler = parentds_ubus_method_handler;
+		m[1].name = "*";
+		m[1].handler = NULL;
+		o->n_methods = 1;
+		o->methods = &m[0];
+		t->n_methods = 1;
+		t->methods = &m[1];
+		int ret = ubus_add_object(s.ubus_ctx, o);
+		if (ret) {
+			fprintf(stderr, "Cannot add parent-ds object, error %d\n", ret);
 			exit(1);
 		}
 	}
@@ -144,12 +211,14 @@ int main(int argc, char *argv[])
 			s.ubus_ctx->connection_lost = ubus_connection_lost;
 			setup_ubus_objects();
 			clock_register_port_update_cb(s.c, port_update_cb, NULL);
+			clock_register_clock_update_cb(s.c, clock_update_cb, NULL);
 			fprintf(stderr, "Connected to ubusd\n");
 		}
 
 		if (s.ubus_ctx->sock.fd < 0) {
 			if (!ubus_reconnect(s.ubus_ctx, NULL)) {
 				clock_register_port_update_cb(s.c, port_update_cb, NULL);
+				clock_register_clock_update_cb(s.c, clock_update_cb, NULL);
 				fprintf(stderr, "Connected to ubusd\n");
 			}
 		} else {

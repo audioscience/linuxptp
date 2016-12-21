@@ -113,9 +113,31 @@ struct clock {
 	LIST_HEAD(clock_subscribers_head, clock_subscriber) subscribers;
 	port_update_cb_t port_update_cb;
 	void *port_update_cb_priv;
+	clock_update_cb_t clock_update_cb;
+	void *clock_update_cb_priv;
 };
 
 struct clock the_clock;
+
+int clock_register_clock_update_cb(struct clock *c, clock_update_cb_t cb, void *priv)
+{
+	c->clock_update_cb = cb;
+	c->clock_update_cb_priv = priv;
+	/* if the callback is being registered, call it once for each data type */
+	if (c->clock_update_cb) {
+		struct parentDS *pds = &clock_parent_ds(c)->pds;
+		clock_call_clock_update_cb(c, PARENT_DATA_SET, 0, pds, sizeof(pds));
+	}
+	return 0;
+}
+
+int clock_call_clock_update_cb(struct clock *c, int data_id, int ev_id, void *buf, size_t buf_len)
+{
+	if (!c->clock_update_cb)
+		return 0;
+	c->clock_update_cb(data_id, ev_id, buf, buf_len, c->clock_update_cb_priv);
+	return 0;
+}
 
 int clock_register_port_update_cb(struct clock *c, port_update_cb_t cb, void *priv)
 {
@@ -674,12 +696,15 @@ static void clock_update_grandmaster(struct clock *c)
 	c->tds.currentUtcOffset                 = c->utc_offset;
 	c->tds.flags                            = c->time_flags;
 	c->tds.timeSource                       = c->time_source;
+
+	clock_call_clock_update_cb(c, PARENT_DATA_SET, 1 /* MIB ID for ParentClockIdentity */, pds, sizeof(*pds));
 }
 
 static void clock_update_slave(struct clock *c)
 {
 	struct parentDS *pds = &c->dad.pds;
 	struct ptp_message *msg        = TAILQ_FIRST(&c->best->messages);
+
 	c->cur.stepsRemoved            = 1 + c->best->dataset.stepsRemoved;
 	pds->parentPortIdentity        = c->best->dataset.sender;
 	pds->grandmasterIdentity       = msg->announce.grandmasterIdentity;
@@ -695,6 +720,8 @@ static void clock_update_slave(struct clock *c)
 	if (c->tds.currentUtcOffset < CURRENT_UTC_OFFSET) {
 		pr_warning("running in a temporal vortex");
 	}
+
+	clock_call_clock_update_cb(c, PARENT_DATA_SET, 1 /* MIB ID for ParentClockIdentity */, pds, sizeof(*pds));
 }
 
 static int clock_utc_correct(struct clock *c, tmv_t ingress)
