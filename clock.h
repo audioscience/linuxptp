@@ -331,4 +331,9 @@ typedef void (*port_update_cb_t)(struct port_capable_info *info, void *priv);
 int clock_register_port_update_cb(struct clock *c, port_update_cb_t cb, void *priv);
 int clock_call_port_update_cb(struct clock *c, struct port_capable_info *info);
 
+typedef void (*clock_update_cb_t)(int data_id, int ev_id, void *buf, size_t buf_len, void *priv);
+
+int clock_register_clock_update_cb(struct clock *c, clock_update_cb_t cb, void *priv);
+int clock_call_clock_update_cb(struct clock *c, int data_id, int ev_id, void *buf, size_t buf_len);
+
 #endif
