@@ -7,6 +7,7 @@
 #include "clock.h"
 #include "util.h"
 
+#include <malloc.h>
 #include <libubus.h>
 
 struct pub_obj {
@@ -60,7 +61,7 @@ struct blob_attr *as_info_payload(struct port_capable_info *info)
 		INFO_FIELD_UNPACK_BOOL(info, peer_port_id_valid),
 		INFO_FIELD_UNPACK_BOOL(info, nrate_ratio_valid),
 		INFO_FIELD_UNPACK_BOOL(info, port_state_acceptable));
-	blob_put(&b, BLOB_ATTR_STRING, msg, strlen(msg)-1);
+	blob_put(&b, BLOB_ATTR_STRING, msg, strlen(msg));
 	free(msg);
 	return blob_data(b.head);
 }
@@ -88,7 +89,7 @@ struct blob_attr *parent_ds_payload(struct parentDS *pds)
 	blob_buf_init(&b, 0);
 	asprintf(&msg, "{\"tm\":%llu,\"parent-clock-identity\":\"%s\"}",
 		ns, cid2str(&pds->grandmasterIdentity));
-	blob_put(&b, BLOB_ATTR_STRING, msg, strlen(msg)-1);
+	blob_put(&b, BLOB_ATTR_STRING, msg, strlen(msg));
 	free(msg);
 	return blob_data(b.head);
 }
