@@ -455,6 +455,11 @@ static int clock_management_fill_response(struct clock *c, struct port *p,
 		datalen = sizeof(*mtd);
 		respond = 1;
 		break;
+	case PATH_TRACE_LIST:
+		datalen = c->dad.path_length * sizeof(struct ClockIdentity);
+		memcpy(tlv->data, c->dad.ptl, datalen);
+		respond = 1;
+		break;
 	case TIME_STATUS_NP:
 		tsn = (struct time_status_np *) tlv->data;
 		/* Are we the grandmaster? */
@@ -1150,7 +1155,6 @@ int clock_manage(struct clock *c, struct port *p, struct ptp_message *msg)
 	case UTC_PROPERTIES:
 	case TRACEABILITY_PROPERTIES:
 	case TIMESCALE_PROPERTIES:
-	case PATH_TRACE_LIST:
 	case PATH_TRACE_ENABLE:
 	case GRANDMASTER_CLUSTER_TABLE:
 	case ACCEPTABLE_MASTER_TABLE:

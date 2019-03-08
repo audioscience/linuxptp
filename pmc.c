@@ -75,7 +75,7 @@ struct management_id idtab[] = {
 	{ "UTC_PROPERTIES", UTC_PROPERTIES, not_supported },
 	{ "TRACEABILITY_PROPERTIES", TRACEABILITY_PROPERTIES, do_get_action },
 	{ "TIMESCALE_PROPERTIES", TIMESCALE_PROPERTIES, do_get_action },
-	{ "PATH_TRACE_LIST", PATH_TRACE_LIST, not_supported },
+	{ "PATH_TRACE_LIST", PATH_TRACE_LIST, do_get_action },
 	{ "PATH_TRACE_ENABLE", PATH_TRACE_ENABLE, not_supported },
 	{ "GRANDMASTER_CLUSTER_TABLE", GRANDMASTER_CLUSTER_TABLE, not_supported },
 	{ "ACCEPTABLE_MASTER_TABLE", ACCEPTABLE_MASTER_TABLE, not_supported },
@@ -224,6 +224,18 @@ static void pmc_show(struct ptp_message *msg, FILE *fp)
 		goto out;
 	}
 	switch (mgt->id) {
+	case PATH_TRACE_LIST:
+		{
+			int i;
+			struct ClockIdentity *cid = (struct ClockIdentity *) mgt->data;
+			unsigned int num_clocks = (mgt->length - sizeof(mgt->id)) / sizeof(struct ClockIdentity);
+			fprintf(fp, "PATH_TRACE_LIST "
+				IFMT "clockCount %u\n", num_clocks);
+			for (i = 0; i < num_clocks; i++) {
+				fprintf(fp, IFMT "clock %u %s\n", i, cid2str(&cid[i]));
+			}
+		}
+		break;
 	case CLOCK_DESCRIPTION:
 		cd = &msg->last_tlv.cd;
 		fprintf(fp, "CLOCK_DESCRIPTION "
