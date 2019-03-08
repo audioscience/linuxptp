@@ -442,9 +442,17 @@ static int path_trace_append(struct port *p, struct ptp_message *m,
 	return ptt->length + sizeof(ptt->type) + sizeof(ptt->length);
 }
 
+static struct TLV *next_tlv(struct TLV *tlv)
+{
+	uint8_t *ptr = (uint8_t *)tlv;
+	ptr += sizeof(struct TLV) + tlv->length;
+	return (struct TLV *)ptr;
+}
+
 static int path_trace_ignore(struct port *p, struct ptp_message *m)
 {
 	struct ClockIdentity cid;
+	struct TLV *tlv;
 	struct path_trace_tlv *ptt;
 	int i, cnt;
 
@@ -454,10 +462,18 @@ static int path_trace_ignore(struct port *p, struct ptp_message *m)
 	if (m->tlv_count == 0) {
 		return 0;
 	}
-	ptt = (struct path_trace_tlv *) m->announce.suffix;
-	if (ptt->type != TLV_PATH_TRACE) {
-		return 1;
+	tlv = (struct TLV *) m->announce.suffix;
+	for (i = 0; i < m->tlv_count; i++) {
+		if (tlv->type == TLV_PATH_TRACE) {
+			break;
+		}
+		tlv = next_tlv(tlv);
 	}
+	if (m->tlv_count == i) {
+		/* Path trace TLV not found */
+		return 0;
+	}
+	ptt = (struct path_trace_tlv *) tlv;
 	cnt = path_length(ptt);
 	cid = clock_identity(p->clock);
 	for (i = 0; i < cnt; i++) {
@@ -1534,8 +1550,18 @@ static int update_current_master(struct port *p, struct ptp_message *m)
 		clock_update_time_properties(p->clock, tds);
 	}
 	if (p->pod.path_trace_enabled && m->tlv_count != 0) {
-		ptt = (struct path_trace_tlv *) m->announce.suffix;
-		if (ptt->type == TLV_PATH_TRACE) {
+		int i;
+		struct TLV *tlv = (struct TLV *) m->announce.suffix;
+		for (i = 0; i < m->tlv_count; i++) {
+			if (tlv->type == TLV_PATH_TRACE) {
+				break;
+			}
+			tlv = next_tlv(tlv);
+		}
+		ptt = (struct path_trace_tlv *) tlv;
+		if (m->tlv_count == i) {
+			/* Path trace TLV not found */
+		} else {
 			dad = clock_parent_ds(p->clock);
 			memcpy(dad->ptl, ptt->cid, ptt->length);
 			dad->path_length = path_length(ptt);
